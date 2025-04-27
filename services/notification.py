@@ -181,7 +181,8 @@ class NotificationService:
                 # Получаем все непрочитанные уведомления
                 notifications = session.query(Notification).filter(
                     Notification.is_read == False,
-                    Notification.scheduled_at <= datetime.now()
+                    (Notification.scheduled_at <= datetime.now()) |
+                    (Notification.scheduled_at == None)
                 ).all()
 
                 logger.info(f"Found {len(notifications)} pending notifications")
@@ -327,7 +328,7 @@ class NotificationService:
             logger.error(f"Error creating notification: {e}")
             return False
 
-    async def notify_test_completion(self, student_id: int, test_result: dict) -> None:
+    async def notify_test_completion(self, student_id: int, test_result: dict, low_threshold=None, high_threshold=None) -> None:
         """Уведомление родителей о завершении теста учеником"""
         try:
             # Получаем данные ученика
@@ -346,6 +347,7 @@ class NotificationService:
 
                 if not parents:
                     return
+
 
                 # Определяем результат теста для сообщения
                 percentage = test_result.get("percentage", 0)
@@ -382,29 +384,22 @@ class NotificationService:
                     student_settings = settings["student_notifications"].get(str(student_id), {})
 
                     # Проверяем, нужно ли отправлять уведомление о завершении теста
-                    if not student_settings.get("test_completion", False):
-                        continue
+                    if student_settings.get("test_completion", False):
+                        # Проверяем пороговые значения для определения заголовка
+                        if percentage < low_threshold:
+                            title = "Низкий результат теста"
+                        elif percentage >= high_threshold:
+                            title = "Высокий результат теста"
+                        else:
+                            title = "Результат теста"
 
-                    # Проверяем пороговые значения результатов
-                    low_threshold = student_settings.get("low_score_threshold", 60)
-                    high_threshold = student_settings.get("high_score_threshold", 90)
-
-                    send_notification = False
-
-                    if percentage < low_threshold:
-                        send_notification = True
-                        title = "Низкий результат теста"
-                    elif percentage >= high_threshold:
-                        send_notification = True
-                        title = "Высокий результат теста"
-
-                    if send_notification:
                         # Создаем уведомление для родителя
                         notification = Notification(
                             user_id=parent.id,
                             title=title,
                             message=message,
-                            notification_type="test_result"
+                            notification_type="test_result",
+                            scheduled_at=datetime.now()  # Устанавливаем текущую дату
                         )
                         session.add(notification)
 
