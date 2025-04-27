@@ -257,6 +257,7 @@ class StudentHandler:
 
     async def show_question(self, update: Update, context: ContextTypes.DEFAULT_TYPE, edit: bool = False) -> None:
         """Отображение текущего вопроса"""
+        global current_sequence
         query = update.callback_query
         user_id = update.effective_user.id
 
