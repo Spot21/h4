@@ -34,6 +34,7 @@ class HistoryBot:
         self.application = None
         self.notification_service = None
         self.running = False
+        self._shutdown_event = None
 
         # Сервисы
         self.quiz_service = None
@@ -55,20 +56,7 @@ class HistoryBot:
             # Инициализация базы данных
             init_db()
 
-            # Инициализация сервисов
-            self.quiz_service = QuizService()
-            self.parent_service = ParentService()
-
-            self.notification_service = NotificationService(self.application)
-            await self.notification_service.start()
-
-            # Передаем сервис уведомлений в quiz_service
-            self.quiz_service.notification_service = self.notification_service
-
-            # Восстанавливаем состояние активных тестов
-            self.quiz_service.restore_active_quizzes()
-
-            # Создание экземпляра приложения
+            # СНАЧАЛА создаем экземпляр приложения
             persistence = DictPersistence()
             self.application = (
                 Application.builder()
@@ -87,11 +75,27 @@ class HistoryBot:
             # Сохраняем ссылки в контексте приложения
             self.application.bot_data["handlers"] = self.handlers
 
+            # Инициализация сервисов
+            self.quiz_service = QuizService()
+            self.parent_service = ParentService()
+
+            # ТЕПЕРЬ создаем сервис уведомлений с готовым application
+            self.notification_service = NotificationService(self.application)
+
+            # Передаем сервис уведомлений в quiz_service
+            self.quiz_service.notification_service = self.notification_service
+
+            # Восстанавливаем состояние активных тестов
+            self.quiz_service.restore_active_quizzes()
+
             # Регистрация обработчиков команд
             self._register_handlers()
 
             # Установка обработчиков сигналов для корректного завершения
             self._setup_signal_handlers()
+
+            # Запуск сервиса уведомлений ПОСЛЕ всех инициализаций
+            await self.notification_service.start()
 
             # Запуск бота
             self.running = True
@@ -105,9 +109,9 @@ class HistoryBot:
                 drop_pending_updates=True
             )
 
-            # Бесконечный цикл, чтобы бот работал до получения сигнала завершения
-            while self.running:
-                await asyncio.sleep(1)
+            # Используем Event для управления жизненным циклом вместо цикла со sleep
+            self._shutdown_event = asyncio.Event()
+            await self._shutdown_event.wait()
 
         except Exception as e:
             logger.error(f"Error during bot execution: {e}")
@@ -197,12 +201,17 @@ class HistoryBot:
         import platform
         if platform.system() != 'Windows':
             import signal
+            loop = asyncio.get_running_loop()
             for sig in (signal.SIGINT, signal.SIGTERM):
-                loop = asyncio.get_running_loop()
                 loop.add_signal_handler(
                     sig,
-                    lambda s=sig: asyncio.create_task(self.shutdown(s.name))
+                    lambda s=sig: asyncio.create_task(self._handle_signal(s.name))
                 )
+
+    async def _handle_signal(self, signal_name):
+        """Обработчик сигнала завершения"""
+        logger.info(f"Получен сигнал {signal_name}, запускаем корректное завершение")
+        await self.shutdown(signal_name)
 
     async def shutdown(self, signal_name=None):
         """Корректное завершение работы бота"""
@@ -211,6 +220,10 @@ class HistoryBot:
 
         logger.info(f"Shutting down bot{f' (signal: {signal_name})' if signal_name else ''}")
         self.running = False
+
+        # Устанавливаем событие, чтобы завершить основной цикл
+        if self._shutdown_event:
+            self._shutdown_event.set()
 
         try:
             # Сохраняем состояние активных тестов
@@ -232,6 +245,7 @@ class HistoryBot:
                 await self.application.shutdown()
 
             logger.info("Bot shutdown complete")
+
 
         except Exception as e:
             logger.error(f"Error during shutdown: {e}")
