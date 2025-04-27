@@ -308,6 +308,7 @@ class ParentHandler:
                 else:
                     student_id = int(parts[3])
 
+
                 # Получаем текущие настройки
                 settings_result = self.parent_service.get_parent_settings(user_id)
                 if not settings_result["success"]:
@@ -342,84 +343,99 @@ class ParentHandler:
                 # Показываем обновленные настройки
                 await self.show_student_settings(update, context, student_id, student_name, query=query)
 
+
             elif query.data.startswith("parent_threshold_"):
                 # Изменение порогового значения
                 parts = query.data.split("_")
-                threshold_type = parts[2]
-                student_id = int(parts[3])
-                action = parts[4]  # up или down
-
-                # Получаем текущие настройки
-                settings_result = self.parent_service.get_parent_settings(user_id)
-
-                if not settings_result["success"]:
-                    await query.edit_message_text(f"Ошибка получения настроек: {settings_result['message']}")
+                # Защита от ошибок индексирования
+                if len(parts) < 5:
+                    logger.error(f"Некорректный формат callback_data: {query.data}")
+                    await query.edit_message_text("Произошла ошибка. Пожалуйста, попробуйте еще раз.")
                     return
+                # parent_threshold_low_score_threshold_123_up
+                # parent_threshold_high_score_threshold_123_down
+                # parent_threshold_low_score_threshold_123_none
+                try:
+                    threshold_type = parts[2]
+                    if len(parts) >= 4 and parts[2] == "high" and parts[3] == "score":
+                        threshold_type = "high_score_threshold"
+                        student_id = int(parts[5])
+                        action = parts[6] if len(parts) > 6 else "none"
+                    elif len(parts) >= 4 and parts[2] == "low" and parts[3] == "score":
+                        threshold_type = "low_score_threshold"
+                        student_id = int(parts[5])
+                        action = parts[6] if len(parts) > 6 else "none"
+                    else:
+                        student_id = int(parts[3])
+                        action = parts[4] if len(parts) > 4 else "none"
+                    # Получаем текущие настройки
+                    settings_result = self.parent_service.get_parent_settings(user_id)
+                    if not settings_result["success"]:
+                        await query.edit_message_text(f"Ошибка получения настроек: {settings_result['message']}")
+                        return
 
-                settings = settings_result["settings"]
+                    settings = settings_result["settings"]
+                    # Убеждаемся, что структура настроек существует
+                    if "student_notifications" not in settings:
+                        settings["student_notifications"] = {}
 
-                # Убеждаемся, что структура настроек существует
-                if "student_notifications" not in settings:
-                    settings["student_notifications"] = {}
+                    if str(student_id) not in settings["student_notifications"]:
+                        settings["student_notifications"][str(student_id)] = {}
+                    student_settings = settings["student_notifications"][str(student_id)]
+                    # Устанавливаем значения по умолчанию если их нет
+                    if threshold_type == "low_score_threshold" and threshold_type not in student_settings:
+                        student_settings[threshold_type] = 60
+                    elif threshold_type == "high_score_threshold" and threshold_type not in student_settings:
+                        student_settings[threshold_type] = 90
+                    # Если действие "none", просто показываем настройки без изменений
+                    if action == "none":
+                        # Получаем имя ученика
+                        students_result = self.parent_service.get_linked_students(user_id)
+                        student_name = ""
+                        if students_result["success"]:
+                            for student in students_result["students"]:
+                                if student["id"] == student_id:
+                                    student_name = student["full_name"] or student[
+                                        "username"] or f"Ученик {student['id']}"
+                                    break
+                        # Показываем настройки без изменений
+                        await self.show_student_settings(update, context, student_id, student_name, query=query)
+                        return
+                    # Изменяем пороговое значение
+                    current_value = student_settings.get(threshold_type,
+                                                         60 if threshold_type == "low_score_threshold" else 90)
+                    if action == "up":
+                        new_value = min(current_value + 5, 100)
+                    else:  # down
+                        new_value = max(current_value - 5, 0)
+                    # Проверяем, чтобы низкий порог не был выше высокого и наоборот
+                    if threshold_type == "low_score_threshold" and "high_score_threshold" in student_settings:
+                        new_value = min(new_value, student_settings["high_score_threshold"] - 5)
+                    elif threshold_type == "high_score_threshold" and "low_score_threshold" in student_settings:
+                        new_value = max(new_value, student_settings["low_score_threshold"] + 5)
+                    student_settings[threshold_type] = new_value
+                    # Сохраняем настройки
+                    result = self.parent_service.setup_notifications(user_id, student_id, student_settings)
+                    if not result["success"]:
+                        await query.edit_message_text(f"Ошибка сохранения настроек: {result['message']}")
+                        return
+                    # Получаем имя ученика для отображения
+                    students_result = self.parent_service.get_linked_students(user_id)
+                    student_name = ""
+                    if students_result["success"]:
+                        for student in students_result["students"]:
+                            if student["id"] == student_id:
+                                student_name = student["full_name"] or student["username"] or f"Ученик {student['id']}"
+                                break
+                    # Показываем обновленные настройки
+                    await self.show_student_settings(update, context, student_id, student_name, query=query)
 
-                if str(student_id) not in settings["student_notifications"]:
-                    settings["student_notifications"][str(student_id)] = {}
-
-                student_settings = settings["student_notifications"][str(student_id)]
-
-                # Устанавливаем значения по умолчанию
-                if threshold_type == "low_score_threshold" and threshold_type not in student_settings:
-                    student_settings[threshold_type] = 60
-                elif threshold_type == "high_score_threshold" and threshold_type not in student_settings:
-                    student_settings[threshold_type] = 90
-
-                # Изменяем пороговое значение
-                current_value = student_settings.get(threshold_type,
-                                                    60 if threshold_type == "low_score_threshold" else 90)
-
-                if action == "up":
-                    new_value = min(current_value + 5, 100)
-                else:  # down
-                    new_value = max(current_value - 5, 0)
-
-                student_settings[threshold_type] = new_value
-
-                # Сохраняем настройки
-                result = self.parent_service.setup_notifications(user_id, student_id, student_settings)
-
-                if not result["success"]:
-                    await query.edit_message_text(f"Ошибка сохранения настроек: {result['message']}")
-                    return
-
-                # Получаем имя ученика
-                students_result = self.parent_service.get_linked_students(user_id)
-                student_name = ""
-                if students_result["success"]:
-                    for student in students_result["students"]:
-                        if student["id"] == student_id:
-                            student_name = student["full_name"] or student["username"] or f"Ученик {student['id']}"
-                            break
-
-                # Показываем обновленные настройки
-                await self.show_student_settings(update, context, student_id, student_name, query=query)
-
-            elif query.data == "parent_back_students":
-                # Возврат к списку учеников
-                students_result = self.parent_service.get_linked_students(user_id)
-
-                if not students_result["success"]:
-                    await query.edit_message_text(f"Ошибка: {students_result['message']}")
-                    return
-
-                students = students_result["students"]
-
-                # Используем готовую клавиатуру
-                reply_markup = parent_students_keyboard(students)
-
-                await query.edit_message_text(
-                    "Выберите ученика для просмотра отчета:",
-                    reply_markup=reply_markup
-                )
+                except Exception as e:
+                    logger.error(f"Ошибка обработки порогового значения: {e}")
+                    logger.error(traceback.format_exc())
+                    await query.edit_message_text(
+                        f"Произошла ошибка при обработке настроек. Пожалуйста, попробуйте снова."
+                    )
 
         except Exception as e:
             logger.error(f"Error in handle_parent_button: {e}")
@@ -562,7 +578,7 @@ class ParentHandler:
 
         student_settings = settings["student_notifications"][str(student_id)]
 
-        # Получаем пороговые значения
+        # Получаем пороговые значения с значениями по умолчанию
         low_score_threshold = student_settings.get("low_score_threshold", 60)
         high_score_threshold = student_settings.get("high_score_threshold", 90)
 
@@ -577,23 +593,31 @@ class ParentHandler:
             low_score_threshold, high_score_threshold
         )
 
-        # Добавляем информацию о пороговых значениях в текст сообщения
-        settings_text = f"⚙️ *Настройки уведомлений для ученика {student_name}*\n\n"
-        settings_text += "Выберите, когда вы хотите получать уведомления об успеваемости ученика:\n\n"
-        settings_text += f"• Порог низкого результата: {low_score_threshold}%\n"
-        settings_text += f"• Порог высокого результата: {high_score_threshold}%\n"
-
         # Форматируем сообщение с настройками
         settings_text = f"⚙️ *Настройки уведомлений для ученика {student_name}*\n\n"
-        settings_text += "Выберите, когда вы хотите получать уведомления об успеваемости ученика:\n\n"
+        settings_text += f"Вы можете настроить, когда получать уведомления об успеваемости ученика:\n\n"
+        settings_text += f"• Еженедельные отчеты: {'✅ Включено' if weekly_reports else '❌ Отключено'}\n"
+        settings_text += f"• Уведомления о тестах: {'✅ Включено' if test_completion else '❌ Отключено'}\n"
+        settings_text += f"• Порог низкого результата: {low_score_threshold}%\n"
+        settings_text += f"• Порог высокого результата: {high_score_threshold}%\n\n"
+        settings_text += f"Используйте кнопки ниже для изменения настроек."
 
         # Отправляем или обновляем сообщение
         if query:
-            await query.edit_message_text(
-                settings_text,
-                reply_markup=reply_markup,
-                parse_mode="Markdown"
-            )
+            try:
+                await query.edit_message_text(
+                    settings_text,
+                    reply_markup=reply_markup,
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                logger.error(f"Ошибка при обновлении сообщения настроек: {e}")
+                # Если сообщение не изменилось, это нормально
+                if "message is not modified" not in str(e).lower():
+                    await query.edit_message_text(
+                        f"Ошибка при обновлении настроек. Пожалуйста, попробуйте снова.",
+                        reply_markup=reply_markup
+                    )
         else:
             await update.message.reply_text(
                 settings_text,
