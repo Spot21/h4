@@ -68,6 +68,31 @@ class ParentService:
                 parent.children.append(student)
                 session.commit()
 
+                # После привязки ученика к родителю
+                parent.children.append(student)
+
+                # Создаем настройки уведомлений по умолчанию
+                try:
+                    parent_settings = json.loads(parent.settings) if parent.settings else {}
+                except json.JSONDecodeError:
+                    parent_settings = {}
+
+                if "student_notifications" not in parent_settings:
+                    parent_settings["student_notifications"] = {}
+
+                # Устанавливаем настройки по умолчанию для этого ученика
+                parent_settings["student_notifications"][str(student.id)] = {
+                    "test_completion": True,  # Включаем уведомления о завершении тестов по умолчанию
+                    "weekly_reports": False,
+                    "monthly_reports": False,
+                    "low_score_threshold": 60,
+                    "high_score_threshold": 90
+                }
+
+                parent.settings = json.dumps(parent_settings)
+
+                session.commit()
+
                 student_name = student.full_name or student.username or student_telegram_id
                 return {
                     "success": True,
