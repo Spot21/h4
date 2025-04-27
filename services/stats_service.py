@@ -327,24 +327,39 @@ def get_problematic_questions(limit: int = 10) -> Dict[str, Any]:
         logger.error(traceback.format_exc())
         return {"success": False, "message": f"Ошибка при получении проблемных вопросов: {str(e)}"}
 
+
 def update_user_stats(user_id: int) -> Dict[str, Any]:
     """Обновление общей статистики пользователя после прохождения теста"""
     try:
         with get_session() as session:
-            user = session.query(User).filter(User.telegram_id == user_id).first()
-            if not user:
-                return {"success": False, "message": "Пользователь не найден"}
+            # Начинаем транзакцию
+            session.begin()
 
-            # Обновляем время последней активности
-            user.last_active = datetime.now()
+            try:
+                user = session.query(User).filter(User.telegram_id == user_id).first()
+                if not user:
+                    # Отменяем транзакцию при ошибке
+                    session.rollback()
+                    return {"success": False, "message": "Пользователь не найден"}
 
-            # Можно добавить дополнительные обновления статистики,
-            # например, общее время в системе, количество пройденных тестов и т.д.
+                # Обновляем время последней активности
+                user.last_active = datetime.now()
 
-            session.commit()
-            return {"success": True}
+                # Можно добавить дополнительные обновления статистики,
+                # например, общее время в системе, количество пройденных тестов и т.д.
+
+                # Фиксируем транзакцию
+                session.commit()
+                return {"success": True}
+
+            except Exception as e:
+                # В случае ошибки отменяем транзакцию
+                session.rollback()
+                raise e  # Переброс исключения для дальнейшей обработки
 
     except Exception as e:
+        logger.error(f"Ошибка при обновлении статистики: {e}")
+        logger.error(traceback.format_exc())
         return {"success": False, "message": f"Ошибка при обновлении статистики: {str(e)}"}
 
 
