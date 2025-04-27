@@ -93,13 +93,13 @@ def parent_settings_keyboard(student_id, weekly_reports, test_completion,
     keyboard = [
         [
             InlineKeyboardButton(
-                f"{'Отключить' if weekly_reports else 'Включить'} еженедельные отчеты",
+                f"{'✅' if weekly_reports else '❌'} Еженедельные отчеты",
                 callback_data=f"parent_toggle_weekly_reports_{student_id}"
             )
         ],
         [
             InlineKeyboardButton(
-                f"{'Отключить' if test_completion else 'Включить'} уведомления о тестах",
+                f"{'✅' if test_completion else '❌'} Уведомления о тестах",
                 callback_data=f"parent_toggle_test_completion_{student_id}"
             )
         ],
