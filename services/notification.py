@@ -4,9 +4,9 @@ import json
 import traceback
 from datetime import datetime, timedelta, timezone
 
-import telegram
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+# Обновляем импорты для современной версии python-telegram-bot
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import BadRequest, Forbidden, TelegramError
 from telegram.ext import Application
 
 from database.models import User, Notification
@@ -22,11 +22,12 @@ class NotificationService:
     def __init__(self, application: Application):
         """Инициализация сервиса уведомлений"""
         self.application = application
+        if self.application is None:
+            logger.critical("Application объект в NotificationService равен None! Уведомления работать не будут.")
+
         self.scheduler = None
         self._running = False
         self.parent_service = ParentService()
-
-    # Изменения в services/notification.py
 
     async def start(self):
         """Запуск планировщика уведомлений"""
@@ -35,7 +36,12 @@ class NotificationService:
                 logger.warning("Notification service is already running")
                 return
 
+            if self.application is None:
+                logger.critical("Cannot start notification service: application is None")
+                return
+
             # Создаем планировщик
+            from apscheduler.schedulers.asyncio import AsyncIOScheduler
             self.scheduler = AsyncIOScheduler()
 
             # Добавляем задачи с использованием асинхронных функций
@@ -76,7 +82,6 @@ class NotificationService:
             logger.error(traceback.format_exc())
             self._running = False
 
-    # В файле services/notification.py добавляем метод send_monthly_reports:
 
     async def send_monthly_reports(self):
         """Отправка ежемесячных отчетов родителям"""
@@ -130,7 +135,7 @@ class NotificationService:
                                 title=f"Ежемесячный отчет по ученику {student.full_name or student.username}",
                                 message="Ваш ежемесячный отчет об успеваемости ученика готов. Используйте команду /report для просмотра.",
                                 notification_type="report",
-                                scheduled_at=datetime.utcnow()
+                                scheduled_at=datetime.now()
                             )
                             session.add(notification)
                             logger.info(
@@ -174,6 +179,11 @@ class NotificationService:
     async def process_notifications(self):
         """Обработка и отправка запланированных уведомлений"""
         if not self._running:
+            logger.warning("Notification service is not running")
+            return
+
+        if self.application is None:
+            logger.error("Cannot process notifications: application is None")
             return
 
         try:
@@ -228,7 +238,7 @@ class NotificationService:
                                 reply_markup=reply_markup
                             )
 
-                    except telegram.error.BadRequest as bad_request:
+                    except BadRequest as bad_request:
                         logger.error(f"Ошибка при отправке уведомления {notification.id}: {bad_request}")
                         # Если ошибка не связана с форматированием, пытаемся отправить без разметки
                         if "can't parse entities" in str(bad_request).lower():
@@ -245,7 +255,7 @@ class NotificationService:
                             # Для других ошибок все равно отмечаем как прочитанное
                             notification.is_read = True
 
-                    except telegram.error.Unauthorized:
+                    except Forbidden:
                         logger.warning(f"Пользователь {user.telegram_id} заблокировал бота")
                         notification.is_read = True
 
@@ -326,7 +336,7 @@ class NotificationService:
                 session.commit()
 
                 # Если уведомление нужно отправить сейчас, запускаем обработку
-                if scheduled_at is None or scheduled_at <= datetime.utcnow():
+                if scheduled_at is None or scheduled_at <= datetime.now():
                     await self.process_notifications()
 
                 return True
@@ -337,6 +347,10 @@ class NotificationService:
 
     async def notify_test_completion(self, student_id: int, test_result: dict) -> None:
         """Уведомление родителей о завершении теста учеником"""
+        if self.application is None:
+            logger.error("Cannot notify test completion: application is None")
+            return
+
         try:
             # Получаем данные ученика
             with get_session() as session:
@@ -380,6 +394,7 @@ class NotificationService:
                 )
 
                 # Для каждого родителя проверяем настройки уведомлений
+                notifications_created = False
                 for parent in parents:
                     if not parent.settings:
                         logger.info(f"У родителя {parent.id} нет настроек уведомлений")
@@ -399,6 +414,9 @@ class NotificationService:
 
                     # Проверяем, нужно ли отправлять уведомление о завершении теста
                     if student_settings.get("test_completion", False):
+                        logger.info(
+                            f"Создаем уведомление для родителя {parent.id} о завершении теста учеником {student_id}")
+
                         # Получаем пороговые значения из настроек
                         low_threshold = student_settings.get("low_score_threshold", 60)
                         high_threshold = student_settings.get("high_score_threshold", 90)
@@ -420,13 +438,20 @@ class NotificationService:
                             scheduled_at=datetime.now()  # Устанавливаем текущую дату
                         )
                         session.add(notification)
+                        notifications_created = True
                         logger.info(
                             f"Создано уведомление о результате теста для родителя {parent.id}, ученик {student_id}, результат {percentage}%")
 
                 # Сохраняем изменения
                 session.commit()
-                logger.info(f"Уведомления о результатах теста сохранены в базу данных")
+
+                # Если были созданы уведомления, сразу запускаем их обработку
+                if notifications_created:
+                    logger.info("Запускаем немедленную обработку созданных уведомлений")
+                    await self.process_notifications()
+
+                logger.info(f"Уведомления о результатах теста обработаны для ученика {student_id}")
 
         except Exception as e:
             logger.error(f"Ошибка при отправке уведомления о завершении теста: {e}")
-            logger.error(traceback.format_exc())  # Для лучшей диагностики
+            logger.error(traceback.format_exc())
