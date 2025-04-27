@@ -15,10 +15,19 @@ from services.parent_service import ParentService
 
 logger = logging.getLogger(__name__)
 
+
 class CommonHandler:
-    def __init__(self, quiz_service: QuizService, parent_service: ParentService):
+    def __init__(self, quiz_service, parent_service,
+                 student_handler=None, parent_handler=None,
+                 admin_handler=None, start_handler=None):
         self.quiz_service = quiz_service
         self.parent_service = parent_service
+
+        # Сохраняем ссылки на другие обработчики
+        self.student_handler = student_handler
+        self.parent_handler = parent_handler
+        self.admin_handler = admin_handler
+        self.start_handler = start_handler
 
     async def check_and_create_user(self, user_id: int, username: str, full_name: str, role: str) -> bool:
         """Проверка и создание пользователя, если он не существует"""
