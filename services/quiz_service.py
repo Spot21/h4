@@ -470,33 +470,25 @@ class QuizService:
             new_achievements = self.check_achievements(user_id, correct_count, total_questions, percentage)
 
             try:
-                # Пробуем отправить уведомление родителям, если есть notification_service
+                # Пробуем отправить уведомление родителям через сервис уведомлений
                 notification_service = self.get_notification_service()
                 if notification_service:
-                    logger.info(f"Найден сервис уведомлений для user_id={user_id}")
-                    # Создаем задачу, но не ждем ее завершения
-                    import asyncio
-                    try:
-                        loop = asyncio.get_event_loop()
-                        if loop.is_running():
-                            loop.create_task(notification_service.notify_test_completion(
-                                user.id,
-                                {
-                                    "correct_count": correct_count,
-                                    "total_questions": total_questions,
-                                    "percentage": percentage,
-                                    "topic_id": quiz_data["topic_id"]
-                                }
-                            ))
-                            logger.info(f"Задача на отправку уведомления создана для user_id={user_id}")
-                        else:
-                            logger.warning("Событийный цикл не запущен, уведомление не отправлено")
-                    except Exception as e:
-                        logger.error(f"Ошибка при создании асинхронной задачи: {e}")
+                    logger.info(f"Отправляем уведомление родителям для ученика {user_id}")
+                    # Создаем асинхронную задачу
+                    asyncio.create_task(notification_service.notify_test_completion(
+                        user.id,
+                        {
+                            "correct_count": correct_count,
+                            "total_questions": total_questions,
+                            "percentage": percentage,
+                            "topic_id": quiz_data["topic_id"]
+                        }
+                    ))
                 else:
-                    logger.warning(f"Сервис уведомлений не найден для user_id={user_id}")
+                    logger.warning(f"Сервис уведомлений недоступен для user_id={user_id}")
             except Exception as e:
                 logger.error(f"Ошибка при отправке уведомления родителям: {e}")
+                logger.error(traceback.format_exc())
 
         # Удаляем тест из активных
         del self.active_quizzes[user_id]
@@ -513,25 +505,7 @@ class QuizService:
         }
 
     def get_notification_service(self) -> Optional['NotificationService']:
-        """Получение сервиса уведомлений из контекста приложения"""
-        try:
-            # Сначала проверяем, есть ли атрибут notification_service у текущего объекта
-            if hasattr(self, 'notification_service'):
-                return self.notification_service
+        """Получение сервиса уведомлений"""
+        return getattr(self, 'notification_service', None)
 
-            # Пытаемся найти в стеке вызовов
-            import inspect
-            frame = inspect.currentframe()
-            while frame:
-                if 'self' in frame.f_locals and hasattr(frame.f_locals['self'], 'notification_service'):
-                    service = frame.f_locals['self'].notification_service
-                    logger.info(f"Найден сервис уведомлений в стеке вызовов")
-                    return service
-                frame = frame.f_back
-
-            logger.warning("Сервис уведомлений не найден в контексте")
-            return None
-        except Exception as e:
-            logger.error(f"Ошибка при получении сервиса уведомлений: {e}")
-            return None
 
