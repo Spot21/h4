@@ -59,6 +59,12 @@ class HistoryBot:
             self.quiz_service = QuizService()
             self.parent_service = ParentService()
 
+            self.notification_service = NotificationService(self.application)
+            await self.notification_service.start()
+
+            # Передаем сервис уведомлений в quiz_service
+            self.quiz_service.notification_service = self.notification_service
+
             # Восстанавливаем состояние активных тестов
             self.quiz_service.restore_active_quizzes()
 
@@ -80,10 +86,6 @@ class HistoryBot:
 
             # Сохраняем ссылки в контексте приложения
             self.application.bot_data["handlers"] = self.handlers
-
-            # Инициализация сервиса уведомлений
-            self.notification_service = NotificationService(self.application)
-            await self.notification_service.start()
 
             # Регистрация обработчиков команд
             self._register_handlers()
