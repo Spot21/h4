@@ -189,6 +189,7 @@ class NotificationService:
         try:
             logger.info("Запущена обработка уведомлений")
             processed_count = 0
+            failed_count = 0
 
             with get_session() as session:
                 # Получаем все непрочитанные уведомления
@@ -206,70 +207,106 @@ class NotificationService:
                     user = session.query(User).get(notification.user_id)
                     if not user:
                         logger.warning(f"Пользователь не найден для уведомления {notification.id}")
-                        notification.is_read = True
+                        # Не отмечаем как прочитанное, могут быть проблемы с БД
                         continue
 
-                    # Отправляем уведомление
-                    try:
-                        await self.application.bot.send_message(
-                            chat_id=user.telegram_id,
-                            text=f"*{notification.title}*\n\n{notification.message}",
-                            parse_mode="Markdown"
-                        )
+                    # Отправляем уведомление с повторными попытками
+                    success = await self._send_notification_with_retry(
+                        user.telegram_id,
+                        notification.title,
+                        notification.message,
+                        notification.notification_type
+                    )
 
+                    if success:
+                        # Только при успешной отправке отмечаем как прочитанное
+                        notification.is_read = True
                         processed_count += 1
-
-                        # Помечаем уведомление как прочитанное
-                        notification.is_read = True
                         logger.info(f"Уведомление {notification.id} отправлено пользователю {user.telegram_id}")
-
-                        # Если это уведомление об отчете, добавляем специальную кнопку
-                        if notification.notification_type == "report":
-                            keyboard = [
-                                [
-                                    InlineKeyboardButton("📊 Посмотреть отчет", callback_data="common_reports")
-                                ]
-                            ]
-                            reply_markup = InlineKeyboardMarkup(keyboard)
-
-                            await self.application.bot.send_message(
-                                chat_id=user.telegram_id,
-                                text="Вы можете посмотреть отчет, нажав на кнопку ниже:",
-                                reply_markup=reply_markup
-                            )
-
-                    except BadRequest as bad_request:
-                        logger.error(f"Ошибка при отправке уведомления {notification.id}: {bad_request}")
-                        # Если ошибка не связана с форматированием, пытаемся отправить без разметки
-                        if "can't parse entities" in str(bad_request).lower():
-                            try:
-                                await self.application.bot.send_message(
-                                    chat_id=user.telegram_id,
-                                    text=f"{notification.title}\n\n{notification.message}"
-                                )
-                                notification.is_read = True
-                                processed_count += 1
-                            except Exception as retry_error:
-                                logger.error(f"Ошибка повторной отправки: {retry_error}")
+                    else:
+                        # Увеличиваем счетчик неудачных попыток или добавляем его, если не существует
+                        if not hasattr(notification, 'retry_count'):
+                            notification.retry_count = 1
                         else:
-                            # Для других ошибок все равно отмечаем как прочитанное
+                            notification.retry_count += 1
+
+                        # Если превышено максимальное количество попыток (5), отмечаем как прочитанное
+                        if getattr(notification, 'retry_count', 0) >= 5:
                             notification.is_read = True
+                            logger.warning(
+                                f"Уведомление {notification.id} отмечено как прочитанное после 5 неудачных попыток")
 
-                    except Forbidden:
-                        logger.warning(f"Пользователь {user.telegram_id} заблокировал бота")
-                        notification.is_read = True
-
-                    except Exception as e:
-                        logger.error(f"Ошибка отправки уведомления {notification.id}: {e}")
-                        logger.error(traceback.format_exc())
+                        failed_count += 1
 
                 # Сохраняем изменения
                 session.commit()
-                logger.info(f"Обработка уведомлений завершена, отправлено {processed_count} из {len(notifications)}")
+                logger.info(f"Обработка уведомлений завершена. Успешно: {processed_count}, Неудачно: {failed_count}")
 
         except Exception as e:
             logger.error(f"Ошибка процесса обработки уведомлений: {e}")
             logger.error(traceback.format_exc())
+
+    async def _send_notification_with_retry(self, chat_id: int, title: str, message: str, notification_type: str,
+                                            max_retries: int = 3) -> bool:
+        """Отправка уведомления с повторными попытками"""
+        if self.application is None:
+            logger.error(f"Cannot send notification: application is None")
+            return False
+
+        for attempt in range(max_retries):
+            try:
+                # Пытаемся отправить сообщение
+                await self.application.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"*{title}*\n\n{message}",
+                    parse_mode="Markdown"
+                )
+
+                # Если это уведомление об отчете, добавляем специальную кнопку
+                if notification_type == "report":
+                    keyboard = [
+                        [InlineKeyboardButton("📊 Посмотреть отчет", callback_data="common_reports")]
+                    ]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+
+                    await self.application.bot.send_message(
+                        chat_id=chat_id,
+                        text="Вы можете посмотреть отчет, нажав на кнопку ниже:",
+                        reply_markup=reply_markup
+                    )
+
+                return True  # Успешная отправка
+
+            except BadRequest as bad_request:
+                logger.warning(
+                    f"BadRequest при отправке уведомления (попытка {attempt + 1}/{max_retries}): {bad_request}")
+
+                # Если ошибка связана с форматированием, пытаемся отправить без разметки
+                if "can't parse entities" in str(bad_request).lower():
+                    try:
+                        await self.application.bot.send_message(
+                            chat_id=chat_id,
+                            text=f"{title}\n\n{message}"
+                        )
+                        return True  # Успешная отправка без разметки
+                    except Exception as retry_error:
+                        logger.error(f"Ошибка повторной отправки без разметки: {retry_error}")
+
+                # Если это не последняя попытка, ждем перед повторением
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(1)  # Пауза перед следующей попыткой
+
+            except Forbidden:
+                logger.warning(f"Пользователь {chat_id} заблокировал бота")
+                return False  # Не пытаемся повторить, если бот заблокирован
+
+            except Exception as e:
+                logger.error(f"Ошибка отправки уведомления: {e}")
+                # Если это не последняя попытка, ждем перед повторением
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(1)
+
+        return False  # Все попытки неудачны
 
     async def send_weekly_reports(self):
         """Отправка еженедельных отчетов родителям"""
@@ -313,6 +350,24 @@ class NotificationService:
         except Exception as e:
             logger.error(f"Error sending reminders: {e}")
             logger.error(traceback.format_exc())
+
+    async def _add_to_retry_queue(self, notification_id, retry_after=300):
+        """Добавление уведомления в очередь для повторной обработки"""
+        try:
+            with get_session() as session:
+                notification = session.query(Notification).get(notification_id)
+                if notification:
+                    # Устанавливаем время следующей попытки
+                    notification.scheduled_at = datetime.now(timezone.utc) + timedelta(seconds=retry_after)
+                    # Увеличиваем счетчик попыток
+                    notification.retry_count = getattr(notification, 'retry_count', 0) + 1
+                    session.commit()
+                    logger.info(f"Уведомление {notification_id} добавлено в очередь повторной обработки")
+                    return True
+        except Exception as e:
+            logger.error(f"Ошибка при добавлении уведомления {notification_id} в очередь повторной обработки: {e}")
+            logger.error(traceback.format_exc())
+        return False
 
     async def create_notification(self, user_id: int, title: str, message: str,
                                   notification_type: str, scheduled_at: datetime = None) -> bool:
