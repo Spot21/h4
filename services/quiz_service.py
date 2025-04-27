@@ -337,48 +337,45 @@ class QuizService:
 
         return {"success": True, "is_completed": False}
 
-    def check_achievements(self, user_id: int, correct_count: int, total_questions: int, percentage: float) -> List[
-        Dict[str, Any]]:
-        """Проверка и выдача достижений"""
+    def check_achievements(self, session, user_id: int, correct_count: int, total_questions: int, percentage: float) -> \
+    List[Dict[str, Any]]:
+        """Проверка и выдача достижений с использованием существующей сессии"""
         new_achievements = []
 
-        with get_session() as session:
-            user = session.query(User).filter(User.telegram_id == user_id).first()
-            if not user:
-                return []
+        # Получаем пользователя
+        user = session.query(User).filter(User.telegram_id == user_id).first()
+        if not user:
+            return []
 
-            # Получаем уже имеющиеся достижения пользователя
-            existing_achievements = {a.name for a in user.achievements}
+        # Получаем уже имеющиеся достижения пользователя
+        existing_achievements = {a.name for a in user.achievements}
 
-            # Проверяем условия для разных достижений
-            achievements_to_check = [
-                # Достижения за прохождение тестов
-                {"name": "Первый тест", "description": "Пройден первый тест!", "points": 10,
-                 "condition": True, "badge_url": "badges/first_test.png"},
-                {"name": "Отличник", "description": "Получите 100% в тесте", "points": 50,
-                 "condition": percentage == 100, "badge_url": "badges/perfect_score.png"},
-                {"name": "Знаток истории", "description": "Пройдите 10 тестов", "points": 100,
-                 "condition": len(user.results) >= 10, "badge_url": "badges/history_expert.png"},
-            ]
+        # Проверяем условия для разных достижений
+        achievements_to_check = [
+            # Достижения за прохождение тестов
+            {"name": "Первый тест", "description": "Пройден первый тест!", "points": 10,
+             "condition": True, "badge_url": "badges/first_test.png"},
+            {"name": "Отличник", "description": "Получите 100% в тесте", "points": 50,
+             "condition": percentage == 100, "badge_url": "badges/perfect_score.png"},
+            {"name": "Знаток истории", "description": "Пройдите 10 тестов", "points": 100,
+             "condition": session.query(TestResult).filter(TestResult.user_id == user.id).count() >= 10,
+             "badge_url": "badges/history_expert.png"},
+        ]
 
-            # Проверяем каждое достижение
-            for achievement_data in achievements_to_check:
-                if (achievement_data["name"] not in existing_achievements and
-                        achievement_data["condition"]):
-                    # Создаем новое достижение
-                    achievement = Achievement(
-                        user_id=user.id,
-                        name=achievement_data["name"],
-                        description=achievement_data["description"],
-                        badge_url=achievement_data.get("badge_url"),
-                        points=achievement_data.get("points", 0)
-                    )
-                    session.add(achievement)
-                    new_achievements.append(achievement_data)
-
-            # Если есть новые достижения, фиксируем изменения
-            if new_achievements:
-                session.commit()
+        # Проверяем каждое достижение
+        for achievement_data in achievements_to_check:
+            if (achievement_data["name"] not in existing_achievements and
+                    achievement_data["condition"]):
+                # Создаем новое достижение
+                achievement = Achievement(
+                    user_id=user.id,
+                    name=achievement_data["name"],
+                    description=achievement_data["description"],
+                    badge_url=achievement_data.get("badge_url"),
+                    points=achievement_data.get("points", 0)
+                )
+                session.add(achievement)
+                new_achievements.append(achievement_data)
 
         return new_achievements
 
@@ -461,21 +458,54 @@ class QuizService:
                 time_spent=time_spent
             )
             session.add(test_result)
+
+            # Проверяем достижения в той же сессии, вместо вызова отдельного метода
+            new_achievements = []
+
+            # Проверяем условия для разных достижений
+            achievements_to_check = [
+                # Достижения за прохождение тестов
+                {"name": "Первый тест", "description": "Пройден первый тест!", "points": 10,
+                 "condition": True, "badge_url": "badges/first_test.png"},
+                {"name": "Отличник", "description": "Получите 100% в тесте", "points": 50,
+                 "condition": percentage == 100, "badge_url": "badges/perfect_score.png"},
+                {"name": "Знаток истории", "description": "Пройдите 10 тестов", "points": 100,
+                 "condition": session.query(TestResult).filter(TestResult.user_id == user.id).count() >= 10,
+                 "badge_url": "badges/history_expert.png"},
+            ]
+
+            # Получаем уже имеющиеся достижения пользователя
+            existing_achievements = {a.name for a in user.achievements}
+
+            # Проверяем каждое достижение
+            for achievement_data in achievements_to_check:
+                if (achievement_data["name"] not in existing_achievements and
+                        achievement_data["condition"]):
+                    # Создаем новое достижение
+                    achievement = Achievement(
+                        user_id=user.id,
+                        name=achievement_data["name"],
+                        description=achievement_data["description"],
+                        badge_url=achievement_data.get("badge_url"),
+                        points=achievement_data.get("points", 0)
+                    )
+                    session.add(achievement)
+                    new_achievements.append(achievement_data)
+
+            # Фиксируем все изменения в одной транзакции
             session.commit()
 
-            # Обновляем статистику пользователя
-            update_user_stats(user_id)
+            # Обновляем статистику пользователя в той же сессии
+            user.last_active = datetime.now()
+            session.commit()
 
-            # Проверяем достижения
-            new_achievements = self.check_achievements(user_id, correct_count, total_questions, percentage)
-
+        # Запускаем отправку уведомлений родителям в отдельной задаче
+        notification_service = self.get_notification_service()
+        if notification_service:
             try:
-                # Пробуем отправить уведомление родителям через сервис уведомлений
-                notification_service = self.get_notification_service()
-                if notification_service:
-                    logger.info(f"Отправляем уведомление родителям для ученика {user_id}")
-                    # Создаем асинхронную задачу
-                    asyncio.create_task(notification_service.notify_test_completion(
+                # Создаем задачу для отправки уведомления и добавляем обработку ошибок
+                notification_task = asyncio.create_task(
+                    notification_service.notify_test_completion(
                         user.id,
                         {
                             "correct_count": correct_count,
@@ -483,11 +513,16 @@ class QuizService:
                             "percentage": percentage,
                             "topic_id": quiz_data["topic_id"]
                         }
-                    ))
-                else:
-                    logger.warning(f"Сервис уведомлений недоступен для user_id={user_id}")
+                    )
+                )
+
+                # Добавляем обработчик ошибок к задаче
+                notification_task.add_done_callback(
+                    lambda task: self._handle_notification_task_result(task, user.id)
+                )
+
             except Exception as e:
-                logger.error(f"Ошибка при отправке уведомления родителям: {e}")
+                logger.error(f"Ошибка при создании задачи отправки уведомления: {e}")
                 logger.error(traceback.format_exc())
 
         # Удаляем тест из активных
@@ -503,6 +538,17 @@ class QuizService:
             "topic_id": quiz_data["topic_id"],
             "time_spent": time_spent
         }
+
+    def _handle_notification_task_result(self, task, user_id):
+        """Обработка результата задачи отправки уведомления"""
+        try:
+            # Проверяем, была ли ошибка
+            if task.exception():
+                logger.error(f"Ошибка при отправке уведомления для пользователя {user_id}: {task.exception()}")
+            else:
+                logger.info(f"Уведомление для пользователя {user_id} успешно отправлено")
+        except Exception as e:
+            logger.error(f"Ошибка при обработке результата задачи уведомления: {e}")
 
     def get_notification_service(self) -> Optional['NotificationService']:
         """Получение сервиса уведомлений"""
