@@ -536,7 +536,6 @@ class ParentHandler:
                     caption=f"📈 Динамика успеваемости ученика {student_name} {period_name}"
                 )
 
-
     async def show_student_settings(self, update: Update, context: ContextTypes.DEFAULT_TYPE, student_id: int,
                                     student_name: str, query=None) -> None:
         """Показ и редактирование настроек уведомлений для ученика"""
@@ -563,15 +562,26 @@ class ParentHandler:
 
         student_settings = settings["student_notifications"][str(student_id)]
 
+        # Получаем пороговые значения
+        low_score_threshold = student_settings.get("low_score_threshold", 60)
+        high_score_threshold = student_settings.get("high_score_threshold", 90)
+
         # Значения по умолчанию для уведомлений
         test_completion = student_settings.get("test_completion", False)
         weekly_reports = student_settings.get("weekly_reports", False)
         monthly_reports = student_settings.get("monthly_reports", False)
 
-        # Используем обновленную клавиатуру
-        reply_markup = parent_notification_settings_keyboard(
-            student_id, test_completion, weekly_reports, monthly_reports
+        # Используем клавиатуру
+        reply_markup = parent_settings_keyboard(
+            student_id, weekly_reports, test_completion,
+            low_score_threshold, high_score_threshold
         )
+
+        # Добавляем информацию о пороговых значениях в текст сообщения
+        settings_text = f"⚙️ *Настройки уведомлений для ученика {student_name}*\n\n"
+        settings_text += "Выберите, когда вы хотите получать уведомления об успеваемости ученика:\n\n"
+        settings_text += f"• Порог низкого результата: {low_score_threshold}%\n"
+        settings_text += f"• Порог высокого результата: {high_score_threshold}%\n"
 
         # Форматируем сообщение с настройками
         settings_text = f"⚙️ *Настройки уведомлений для ученика {student_name}*\n\n"
