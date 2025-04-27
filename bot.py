@@ -81,12 +81,12 @@ class HistoryBot:
             # Сохраняем ссылки в контексте приложения
             self.application.bot_data["handlers"] = self.handlers
 
-            # Регистрация обработчиков команд
-            self._register_handlers()
-
             # Инициализация сервиса уведомлений
             self.notification_service = NotificationService(self.application)
             await self.notification_service.start()
+
+            # Регистрация обработчиков команд
+            self._register_handlers()
 
             # Установка обработчиков сигналов для корректного завершения
             self._setup_signal_handlers()
