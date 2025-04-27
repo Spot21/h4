@@ -2,7 +2,7 @@ import logging
 import asyncio
 import json
 import traceback
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import telegram
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -42,7 +42,7 @@ class NotificationService:
             self.scheduler.add_job(
                 self.process_notifications,
                 'interval',
-                minutes=5,
+                minutes=2,
                 id='process_notifications'
             )
             self.scheduler.add_job(
@@ -177,40 +177,44 @@ class NotificationService:
             return
 
         try:
+            logger.info("Запущена обработка уведомлений")
+            processed_count = 0
+
             with get_session() as session:
                 # Получаем все непрочитанные уведомления
+                current_time = datetime.now(timezone.utc)
                 notifications = session.query(Notification).filter(
                     Notification.is_read == False,
-                    (Notification.scheduled_at <= datetime.now()) |
+                    (Notification.scheduled_at <= current_time) |
                     (Notification.scheduled_at == None)
                 ).all()
 
-                logger.info(f"Found {len(notifications)} pending notifications")
+                logger.info(f"Найдено {len(notifications)} необработанных уведомлений")
 
                 for notification in notifications:
                     # Получаем пользователя
                     user = session.query(User).get(notification.user_id)
                     if not user:
-                        logger.warning(f"User not found for notification {notification.id}")
+                        logger.warning(f"Пользователь не найден для уведомления {notification.id}")
                         notification.is_read = True
                         continue
 
                     # Отправляем уведомление
                     try:
-
                         await self.application.bot.send_message(
                             chat_id=user.telegram_id,
                             text=f"*{notification.title}*\n\n{notification.message}",
                             parse_mode="Markdown"
                         )
 
+                        processed_count += 1
+
                         # Помечаем уведомление как прочитанное
                         notification.is_read = True
-                        logger.info(f"Notification {notification.id} sent to user {user.telegram_id}")
+                        logger.info(f"Уведомление {notification.id} отправлено пользователю {user.telegram_id}")
 
                         # Если это уведомление об отчете, добавляем специальную кнопку
                         if notification.notification_type == "report":
-                            # Создаем клавиатуру с кнопкой для просмотра отчета
                             keyboard = [
                                 [
                                     InlineKeyboardButton("📊 Посмотреть отчет", callback_data="common_reports")
@@ -225,33 +229,36 @@ class NotificationService:
                             )
 
                     except telegram.error.BadRequest as bad_request:
-                        # Ошибка форматирования сообщения
-                        logger.error(f"Bad request error sending notification {notification.id}: {bad_request}")
-                        try:
-                            # Попытка отправить без разметки
-                            await self.application.bot.send_message(
-                                chat_id=user.telegram_id,
-                                text=f"{notification.title}\n\n{notification.message}"
-                            )
+                        logger.error(f"Ошибка при отправке уведомления {notification.id}: {bad_request}")
+                        # Если ошибка не связана с форматированием, пытаемся отправить без разметки
+                        if "can't parse entities" in str(bad_request).lower():
+                            try:
+                                await self.application.bot.send_message(
+                                    chat_id=user.telegram_id,
+                                    text=f"{notification.title}\n\n{notification.message}"
+                                )
+                                notification.is_read = True
+                                processed_count += 1
+                            except Exception as retry_error:
+                                logger.error(f"Ошибка повторной отправки: {retry_error}")
+                        else:
+                            # Для других ошибок все равно отмечаем как прочитанное
                             notification.is_read = True
-                        except Exception as retry_error:
-                            logger.error(f"Error in retry send: {retry_error}")
 
                     except telegram.error.Unauthorized:
-                        # Пользователь заблокировал бота
-                        logger.warning(f"User {user.telegram_id} has blocked the bot. Marking notification as read.")
+                        logger.warning(f"Пользователь {user.telegram_id} заблокировал бота")
                         notification.is_read = True
 
                     except Exception as e:
-                        logger.error(f"Error sending notification {notification.id} to user {user.telegram_id}: {e}")
+                        logger.error(f"Ошибка отправки уведомления {notification.id}: {e}")
                         logger.error(traceback.format_exc())
 
                 # Сохраняем изменения
                 session.commit()
-                logger.info("Notifications processing completed")
+                logger.info(f"Обработка уведомлений завершена, отправлено {processed_count} из {len(notifications)}")
 
         except Exception as e:
-            logger.error(f"Error processing notifications: {e}")
+            logger.error(f"Ошибка процесса обработки уведомлений: {e}")
             logger.error(traceback.format_exc())
 
     async def send_weekly_reports(self):
@@ -328,13 +335,14 @@ class NotificationService:
             logger.error(f"Error creating notification: {e}")
             return False
 
-    async def notify_test_completion(self, student_id: int, test_result: dict, low_threshold=None, high_threshold=None) -> None:
+    async def notify_test_completion(self, student_id: int, test_result: dict) -> None:
         """Уведомление родителей о завершении теста учеником"""
         try:
             # Получаем данные ученика
             with get_session() as session:
                 student = session.query(User).get(student_id)
                 if not student or student.role != "student":
+                    logger.warning(f"Ученик {student_id} не найден или не является учеником")
                     return
 
                 # Находим родителей этого ученика
@@ -346,8 +354,8 @@ class NotificationService:
                 parents = parents_query.all()
 
                 if not parents:
+                    logger.info(f"Для ученика {student_id} не найдено родителей")
                     return
-
 
                 # Определяем результат теста для сообщения
                 percentage = test_result.get("percentage", 0)
@@ -374,17 +382,27 @@ class NotificationService:
                 # Для каждого родителя проверяем настройки уведомлений
                 for parent in parents:
                     if not parent.settings:
+                        logger.info(f"У родителя {parent.id} нет настроек уведомлений")
                         continue
 
-                    settings = json.loads(parent.settings)
+                    try:
+                        settings = json.loads(parent.settings)
+                    except json.JSONDecodeError:
+                        logger.warning(f"Ошибка формата JSON в настройках родителя {parent.id}")
+                        continue
 
                     if "student_notifications" not in settings:
+                        logger.info(f"У родителя {parent.id} нет настроек уведомлений для учеников")
                         continue
 
                     student_settings = settings["student_notifications"].get(str(student_id), {})
 
                     # Проверяем, нужно ли отправлять уведомление о завершении теста
                     if student_settings.get("test_completion", False):
+                        # Получаем пороговые значения из настроек
+                        low_threshold = student_settings.get("low_score_threshold", 60)
+                        high_threshold = student_settings.get("high_score_threshold", 90)
+
                         # Проверяем пороговые значения для определения заголовка
                         if percentage < low_threshold:
                             title = "Низкий результат теста"
@@ -402,9 +420,13 @@ class NotificationService:
                             scheduled_at=datetime.now()  # Устанавливаем текущую дату
                         )
                         session.add(notification)
+                        logger.info(
+                            f"Создано уведомление о результате теста для родителя {parent.id}, ученик {student_id}, результат {percentage}%")
 
                 # Сохраняем изменения
                 session.commit()
+                logger.info(f"Уведомления о результатах теста сохранены в базу данных")
 
         except Exception as e:
-            logger.error(f"Error notifying about test completion: {e}")
+            logger.error(f"Ошибка при отправке уведомления о завершении теста: {e}")
+            logger.error(traceback.format_exc())  # Для лучшей диагностики
