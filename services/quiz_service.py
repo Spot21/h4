@@ -501,7 +501,6 @@ class QuizService:
         }
 
     def get_notification_service(self) -> Optional['NotificationService']:
-        """Получение сервиса уведомлений"""
         try:
             import inspect
             frame = inspect.currentframe()
