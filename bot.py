@@ -46,6 +46,9 @@ class HistoryBot:
         self.admin_handler = None
         self.common_handler = None
 
+        # Добавим словарь для быстрого доступа к обработчикам
+        self.handlers = {}
+
     async def start(self):
         """Запуск бота"""
         try:
@@ -74,6 +77,9 @@ class HistoryBot:
 
             # Инициализация обработчиков
             self._initialize_handlers()
+
+            # Сохраняем ссылки в контексте приложения
+            self.application.bot_data["handlers"] = self.handlers
 
             # Регистрация обработчиков команд
             self._register_handlers()
@@ -114,10 +120,28 @@ class HistoryBot:
         self.student_handler = StudentHandler(self.quiz_service)
         self.parent_handler = ParentHandler(self.parent_service)
         self.admin_handler = AdminHandler()
-        self.common_handler = CommonHandler(self.quiz_service, self.parent_service)
 
         # Инициализируем сервисы в обработчике администратора
         self.admin_handler.init_services(self.quiz_service, self.parent_service)
+
+        # Создаем CommonHandler и передаем ему все остальные обработчики
+        self.common_handler = CommonHandler(
+            quiz_service=self.quiz_service,
+            parent_service=self.parent_service,
+            student_handler=self.student_handler,
+            parent_handler=self.parent_handler,
+            admin_handler=self.admin_handler,
+            start_handler=self.start_handler
+        )
+
+        # Заполняем словарь обработчиков для удобного доступа
+        self.handlers = {
+            "start": self.start_handler,
+            "student": self.student_handler,
+            "parent": self.parent_handler,
+            "admin": self.admin_handler,
+            "common": self.common_handler
+        }
 
     def _register_handlers(self) -> None:
         """Регистрация обработчиков команд"""
