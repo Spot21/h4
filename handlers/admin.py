@@ -608,7 +608,6 @@ class AdminHandler:
 
             with get_session() as session:
                 user = session.query(User).get(user_id)
-
                 if not user:
                     await query.edit_message_text("Пользователь не найден.")
                     return
@@ -618,7 +617,28 @@ class AdminHandler:
 
                 # Удаляем связанные данные в зависимости от типа пользователя
                 if user_type == "student":
-                    # Удаляем результаты тестов
+                    # Получаем все ID результатов тестов пользователя
+                    test_result_ids = [r.id for r in
+                                       session.query(TestResult).filter(TestResult.user_id == user.id).all()]
+
+                    # Сначала удаляем записи из промежуточной таблицы 'question_result'
+                    if test_result_ids:
+                        # Используем прямой SQL запрос, так как таблица определена как Table, а не класс
+                        from sqlalchemy import text
+                        for test_id in test_result_ids:
+                            session.execute(
+                                text("DELETE FROM question_result WHERE test_result_id = :test_id"),
+                                {"test_id": test_id}
+                            )
+                        # Или удаляем одним запросом
+                        # placeholders = ','.join([':id'+str(i) for i in range(len(test_result_ids))])
+                        # params = {f'id{i}': id_val for i, id_val in enumerate(test_result_ids)}
+                        # session.execute(
+                        #     text(f"DELETE FROM question_result WHERE test_result_id IN ({placeholders})"),
+                        #     params
+                        # )
+
+                    # Теперь можно безопасно удалить результаты тестов
                     session.query(TestResult).filter(TestResult.user_id == user.id).delete()
 
                     # Удаляем достижения
@@ -627,14 +647,19 @@ class AdminHandler:
                     # Удаляем уведомления
                     session.query(Notification).filter(Notification.user_id == user.id).delete()
 
-                    # Удаляем связи с родителями (через таблицу связи)
-                    # Для SQLAlchemy связь parent_student обрабатывается автоматически при удалении пользователя
+                    # Явно отвязываем родителей для решения проблем с foreign key
+                    for parent in user.parents:
+                        parent.children.remove(user)
 
                 elif user_type == "parent":
                     # Удаляем уведомления
                     session.query(Notification).filter(Notification.user_id == user.id).delete()
 
-                    # Связи с учениками будут удалены автоматически
+                    # Явно отвязываем детей
+                    user.children = []
+
+                # Применяем изменения до удаления пользователя
+                session.flush()
 
                 # Удаляем самого пользователя
                 session.delete(user)
@@ -658,6 +683,7 @@ class AdminHandler:
                 await query.edit_message_text(
                     "Произошла ошибка при удалении пользователя."
                 )
+
         except Exception as e:
             logger.error(f"Error in delete_user: {e}")
             logger.error(traceback.format_exc())
