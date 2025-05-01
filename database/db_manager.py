@@ -17,32 +17,29 @@ is_sqlite = DB_ENGINE.startswith('sqlite:///')
 is_postgres = DB_ENGINE.startswith('postgresql://')
 
 # Создаем движок базы данных с улучшенными настройками
-if is_sqlite:
-    sqlite_path = DB_ENGINE.replace('sqlite:///', '')
-    os.makedirs(os.path.dirname(os.path.abspath(sqlite_path)), exist_ok=True)
-
-    engine = create_engine(
-        DB_ENGINE,
-        connect_args={"check_same_thread": False},
-        echo=False,
-        pool_pre_ping=True  # Проверка доступности соединения
-    )
-else:
+if is_postgres:
     engine = create_engine(
         DB_ENGINE,
         echo=False,
-        pool_size=20,  # Увеличиваем размер пула
-        max_overflow=30,  # Увеличиваем overflow
-        pool_timeout=30,  # Тайм-аут получения соединения
-        pool_recycle=3600,  # Пересоздание соединений каждый час
-        pool_pre_ping=True,  # Проверка соединения перед использованием
-        connect_args={  # Дополнительные параметры для PostgreSQL
+        pool_size=20,
+        max_overflow=30,
+        pool_timeout=30,
+        pool_recycle=3600,
+        pool_pre_ping=True,
+        connect_args={  # Только для PostgreSQL
             "connect_timeout": 10,
             "keepalives": 1,
             "keepalives_idle": 30,
             "keepalives_interval": 10,
             "keepalives_count": 5
         }
+    )
+else:
+    # Для SQLite или других движков
+    engine = create_engine(
+        DB_ENGINE,
+        echo=False,
+        pool_pre_ping=True
     )
 
 # Создаем фабрику сессий с автоматическим expire_on_commit=False для работы с объектами после коммита
