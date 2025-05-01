@@ -293,8 +293,16 @@ class QuizService:
 
         current_question = quiz_data["questions"][question_index]
 
+        # Универсальное преобразование ответа к строке для совместимости
+        if current_question["question_type"] == "sequence":
+            # Для последовательности - преобразуем каждый элемент к строке
+            normalized_answer = [str(a) for a in answer] if isinstance(answer, list) else answer
+        else:
+            # Для других типов - оставляем как есть
+            normalized_answer = answer
+
         # Сохраняем ответ
-        quiz_data["answers"][str(current_question["id"])] = answer
+        quiz_data["answers"][str(current_question["id"])] = normalized_answer
 
         # Переходим к следующему вопросу
         quiz_data["current_question"] += 1
@@ -407,16 +415,21 @@ class QuizService:
                         is_correct = False
                     is_correct = user_answer == question["correct_answer"][0]
 
-                elif question["question_type"] == "multiple":
-                    is_correct = set(user_answer) == set(question["correct_answer"])
+
                 elif question["question_type"] == "sequence":
                     if user_answer is None or question["correct_answer"] is None:
                         is_correct = False
                     else:
                         # Преобразуем оба списка к строкам для корректного сравнения
-                        user_seq = [str(x) for x in user_answer]
-                        correct_seq = [str(x) for x in question["correct_answer"]]
-                        is_correct = user_seq == correct_seq
+                        try:
+                            user_seq = [str(x) for x in user_answer] if isinstance(user_answer, list) else [
+                                str(user_answer)]
+                            correct_seq = [str(x) for x in question["correct_answer"]] if isinstance(
+                                question["correct_answer"], list) else [str(question["correct_answer"])]
+                            is_correct = user_seq == correct_seq
+                        except Exception as e:
+                            logger.error(f"Ошибка при сравнении последовательностей: {e}")
+                            is_correct = False
 
             question_results.append({
                 "question": question["text"],
