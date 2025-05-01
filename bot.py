@@ -56,7 +56,7 @@ class HistoryBot:
             # Инициализация базы данных
             init_db()
 
-            # СНАЧАЛА создаем экземпляр приложения
+            # создаем экземпляр приложения
             persistence = DictPersistence()
             self.application = (
                 Application.builder()
@@ -69,21 +69,22 @@ class HistoryBot:
                 .build()
             )
 
+            # Инициализация сервисов
+            self.quiz_service = QuizService()
+            self.parent_service = ParentService()
+
+            # создаем сервис уведомлений с готовым application
+            self.notification_service = NotificationService(self.application)
+
+            # Передаем сервис уведомлений в quiz_service
+            self.quiz_service.notification_service = self.notification_service
+
             # Инициализация обработчиков
             self._initialize_handlers()
 
             # Сохраняем ссылки в контексте приложения
             self.application.bot_data["handlers"] = self.handlers
 
-            # Инициализация сервисов
-            self.quiz_service = QuizService()
-            self.parent_service = ParentService()
-
-            # ТЕПЕРЬ создаем сервис уведомлений с готовым application
-            self.notification_service = NotificationService(self.application)
-
-            # Передаем сервис уведомлений в quiz_service
-            self.quiz_service.notification_service = self.notification_service
 
             # Восстанавливаем состояние активных тестов
             self.quiz_service.restore_active_quizzes()
