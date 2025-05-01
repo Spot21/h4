@@ -277,6 +277,11 @@ class ParentHandler:
                     reply_markup=reply_markup
                 )
 
+                # Добавляем обработчик для кнопки "Назад к списку учеников"
+            elif query.data == "parent_back_students":
+                # Возврат к списку учеников для настроек
+                await self.settings(update, context)
+
 
             # В методе handle_parent_button добавляем новый обработчик:
 
