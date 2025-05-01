@@ -319,10 +319,38 @@ class CommonHandler:
             # Обработка кнопок в зависимости от callback_data
             if callback_data.startswith("common_start_test") or callback_data == "common_start_test":
                 logger.debug(f"Перенаправление на start_test")
-                from handlers.student import StudentHandler
-                student_handler = StudentHandler(self.quiz_service)
-                context.user_data["from_button"] = True  # Флаг для функции, что вызов из кнопки
-                await student_handler.start_test(update, context)
+
+                # Проверяем, существует ли и инициализирован ли student_handler
+                if hasattr(self, 'student_handler') and self.student_handler and hasattr(self.student_handler,
+                                                                                         'quiz_service') and self.student_handler.quiz_service:
+                    # Используем существующий обработчик
+                    context.user_data["from_button"] = True  # Флаг для функции
+                    await self.student_handler.start_test(update, context)
+                else:
+                    # Если student_handler не инициализирован должным образом,
+                    # создаем новый экземпляр с quiz_service
+                    try:
+                        # Проверяем доступность quiz_service
+                        if not hasattr(self, 'quiz_service') or self.quiz_service is None:
+                            logger.error("Quiz service отсутствует в CommonHandler при обработке кнопки начала теста")
+                            await query.edit_message_text(
+                                "Произошла ошибка при запуске теста. Пожалуйста, перезапустите бота или обратитесь к администратору."
+                            )
+                            return
+
+                            # Создаем обработчик с правильным quiz_service
+                            from handlers.student import StudentHandler
+                            student_handler = StudentHandler(self.quiz_service)
+                            context.user_data["from_button"] = True  # Флаг для функции
+                            await student_handler.start_test(update, context)
+                    except Exception as e:
+                        logger.error(f"Ошибка при создании StudentHandler: {e}")
+                        logger.error(traceback.format_exc())
+                        await query.edit_message_text(
+                            "Произошла ошибка при запуске теста. Пожалуйста, попробуйте позже."
+                        )
+
+
 
             elif callback_data.startswith("common_stats") or callback_data == "common_stats":
                 logger.debug(f"Перенаправление на show_stats")
