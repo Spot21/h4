@@ -19,14 +19,46 @@ from keyboards.student_kb import (
 logger = logging.getLogger(__name__)
 
 class StudentHandler:
-    def __init__(self, quiz_service: QuizService):
-        self.quiz_service = quiz_service
+    def __init__(self, quiz_service: QuizService = None):
+        """
+        Инициализация обработчика студента
+
+        Args:
+            quiz_service: Сервис для работы с тестами
+        """
+        if quiz_service is None:
+            # Логируем проблему и пытаемся создать новый сервис
+            logger.warning("StudentHandler создан без quiz_service!")
+            try:
+                from services.quiz_service import QuizService
+                self.quiz_service = QuizService()
+                logger.info("Создан новый экземпляр QuizService в StudentHandler")
+            except Exception as e:
+                logger.error(f"Не удалось создать QuizService: {e}")
+                self.quiz_service = None
+        else:
+            self.quiz_service = quiz_service
 
     async def start_test(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Обработчик команды /test для начала тестирования"""
         try:
             user_id = update.effective_user.id
             logger.info(f"Запуск теста для пользователя {user_id}")
+
+            # Проверка инициализации quiz_service
+            if not hasattr(self, 'quiz_service') or self.quiz_service is None:
+                logger.error("Quiz service не инициализирован!")
+
+                # Отправляем сообщение об ошибке в зависимости от источника вызова
+                if update.callback_query:
+                    await update.callback_query.edit_message_text(
+                        "Произошла ошибка при запуске теста. Пожалуйста, попробуйте позже или обратитесь к администратору."
+                    )
+                else:
+                    await update.message.reply_text(
+                        "Произошла ошибка при запуске теста. Пожалуйста, попробуйте позже или обратитесь к администратору."
+                    )
+                return
 
             # Получаем список доступных тем
             topics = self.quiz_service.get_topics()
@@ -179,6 +211,7 @@ class StudentHandler:
                         # Обновляем вопрос с отмеченными вариантами
                         await self.show_question(update, context, edit=True)
 
+
             elif query.data.startswith("quiz_seq_"):
                 # Обработка выбора для вопроса с последовательностью
                 parts = query.data.split("_")
@@ -188,7 +221,12 @@ class StudentHandler:
                 if current_question and current_question["id"] == question_id:
                     # Проверяем, что этот вариант еще не выбран
                     sequence = self.quiz_service.active_quizzes[user_id]["answers"].get(str(question_id), [])
-                    if str(option_index) not in sequence:
+                    # Убедимся, что sequence это список
+                    if not isinstance(sequence, list):
+                        sequence = []
+                    # Нормализуем все элементы в строки
+                    sequence_str = [str(item) for item in sequence]
+                    if str(option_index) not in sequence_str:
                         # Добавляем вариант к последовательности
                         sequence.append(str(option_index))
                         self.quiz_service.active_quizzes[user_id]["answers"][str(question_id)] = sequence
