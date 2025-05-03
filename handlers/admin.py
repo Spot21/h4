@@ -1578,7 +1578,7 @@ class AdminHandler:
 
         try:
             # Скачиваем файл
-            file = await self.context.bot.get_file(document.file_id)
+            file = await context.bot.get_file(document.file_id)
             file_path = f"downloads/{document.file_name}"
             os.makedirs("downloads", exist_ok=True)
             await file.download_to_drive(file_path)
@@ -1977,7 +1977,7 @@ class AdminHandler:
                 "Неизвестная команда. Пожалуйста, используйте панель администратора."
             )
 
-    def import_questions_from_json(data: dict) -> dict:
+    def import_questions_from_json(self, data: dict) -> dict:
         """Импорт вопросов из JSON"""
         try:
             # Проверяем структуру данных
@@ -2057,7 +2057,7 @@ class AdminHandler:
             logger.error(f"Error in import_questions_from_json: {e}")
             return {"success": False, "message": str(e)}
 
-    def add_question_to_db(data: dict) -> dict:
+    def add_question_to_db(self, data: dict) -> dict:
         """Добавление нового вопроса в базу данных"""
         try:
             # Проверяем наличие необходимых полей
@@ -2101,7 +2101,7 @@ class AdminHandler:
             logger.error(f"Error in add_question_to_db: {e}")
             return {"success": False, "message": str(e)}
 
-    def add_topic_to_db(name: str, description: str = None) -> dict:
+    def add_topic_to_db(self, name: str, description: str = None) -> dict:
         """Добавление новой темы в базу данных"""
         try:
             # Проверяем название
