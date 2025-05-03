@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import telegram
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
+from telegram.error import BadRequest, Forbidden, TelegramError
 
 from database.models import User
 from database.db_manager import get_session
@@ -615,7 +616,7 @@ class CommonHandler:
             # Разные типы ошибок - разные сообщения
             if isinstance(context.error, telegram.error.BadRequest):
                 message = "Произошла ошибка при отправке сообщения. Пожалуйста, попробуйте еще раз."
-            elif isinstance(context.error, telegram.error.Unauthorized):
+            elif isinstance(context.error, Forbidden):
                 message = "Бот не имеет доступа. Возможно, вы его заблокировали?"
             elif isinstance(context.error, telegram.error.TimedOut):
                 message = "Истекло время ожидания ответа от серверов Telegram. Пожалуйста, попробуйте снова."
