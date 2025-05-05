@@ -631,6 +631,24 @@ class CommonHandler:
                 await self.admin_handler.export_to_excel(update, context)
             return
 
+        elif message_text.startswith("📊 Статистика") and user_role == "admin":
+
+            #  сразу вызываем нужный метод из админского обработчика
+            if hasattr(self, 'admin_handler') and self.admin_handler:
+                # Создаем временный объект для callback_query
+                temp_message = await update.message.reply_text("Пожалуйста, подождите...")
+                # Создаем фейковый update с callback_query
+                from telegram import CallbackQuery
+                query = CallbackQuery(id='123', from_user=update.effective_user,
+                                      chat_instance='', data='admin_topic_stats',
+                                      message=temp_message)
+                temp_update = Update(update.update_id, callback_query=query)
+
+                # Вызываем обработчик статистики
+                await self.admin_handler.show_topic_stats(temp_update, context)
+
+            return
+
         elif message_text.startswith("⚙️ Настройки") and user_role == "admin":
             # Обработка настроек для администратора
             if hasattr(self, 'admin_handler') and self.admin_handler:
