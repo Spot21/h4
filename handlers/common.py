@@ -134,11 +134,19 @@ class CommonHandler:
 
                 # Показываем главное меню
                 from keyboards.student_kb import student_main_keyboard
-                reply_markup = student_main_keyboard()
+                from keyboards.menu_kb import student_main_menu
+                inline_markup = student_main_keyboard()
+                reply_markup = student_main_menu()
 
                 await update.message.reply_text(
                     "✅ Регистрация завершена успешно!\n\n"
                     "Теперь вы можете приступить к тестированию:",
+                    reply_markup=inline_markup
+                )
+
+                # Устанавливаем постоянное меню с кнопками
+                await update.message.reply_text(
+                    "Основное меню (всегда доступно):",
                     reply_markup=reply_markup
                 )
             else:
@@ -153,6 +161,10 @@ class CommonHandler:
             username = context.user_data.get("telegram_username")
             full_name = context.user_data.get("user_full_name")
             user_group = context.user_data.get("user_group")
+
+            # Устанавливаем команды для роли ученика
+            from keyboards.menu_kb import set_commands_for_user
+            await set_commands_for_user(context.bot, user_id, "student")
 
             with get_session() as session:
                 # Проверяем, существует ли уже пользователь
@@ -254,12 +266,16 @@ class CommonHandler:
             admin_handler = AdminHandler()
             await admin_handler.show_problematic_questions(update, context)
 
+
+
         elif callback_data == "common_role_parent":
             logger.info(f"Начало регистрации пользователя {user_id} как родителя")
             try:
                 telegram_user = update.effective_user
                 full_name = f"{telegram_user.first_name} {telegram_user.last_name or ''}"
-
+                # Устанавливаем команды для роли родителя
+                from keyboards.menu_kb import set_commands_for_user
+                await set_commands_for_user(context.bot, user_id, "parent")
                 # Создаем или обновляем пользователя
                 success = await self.check_and_create_user(
                     user_id=user_id,
@@ -267,27 +283,31 @@ class CommonHandler:
                     full_name=full_name,
                     role="parent"
                 )
-
                 if not success:
                     raise Exception("Не удалось создать/обновить пользователя")
-
-                # Отправляем сообщение о успешной регистрации
+                # Отправляем сообщение об успешной регистрации
                 await query.edit_message_text(
                     "✅ Вы успешно зарегистрированы как родитель!\n\n"
                     "Вы можете привязать аккаунт ученика, используя команду /link с кодом, который вам предоставит ученик."
                 )
-
                 # Небольшая пауза перед отображением меню
                 await asyncio.sleep(1)
-
                 # Отправляем главное меню
                 from keyboards.parent_kb import parent_main_keyboard
+                from keyboards.menu_kb import parent_main_menu
                 reply_markup = parent_main_keyboard()
-
+                # Отправляем инлайн-клавиатуру
                 await context.bot.send_message(
                     chat_id=update.effective_chat.id,
                     text="Выберите действие:",
                     reply_markup=reply_markup
+                )
+
+                # Устанавливаем постоянную клавиатуру
+                await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text="Основное меню (всегда доступно):",
+                    reply_markup=parent_main_menu()
                 )
                 return
             except Exception as e:
@@ -542,6 +562,86 @@ class CommonHandler:
 
             user_role = user.role
 
+        # Обработка команд с клавиатуры
+        if message_text.startswith("📝 Начать тест"):
+            context.args = []  # Пустой список аргументов
+            if hasattr(self, 'student_handler') and self.student_handler:
+                await self.student_handler.start_test(update, context)
+            return
+
+        elif message_text.startswith("📊 Моя статистика"):
+            context.args = ["all"]  # Аргумент для показа статистики за всё время
+            if hasattr(self, 'student_handler') and self.student_handler:
+                await self.student_handler.show_stats(update, context)
+            return
+
+        elif message_text.startswith("🎯 Рекомендации"):
+            if hasattr(self, 'student_handler') and self.student_handler:
+                await self.student_handler.show_recommendations(update, context)
+            return
+
+        elif message_text.startswith("🏆 Достижения"):
+            context.args = []
+            if hasattr(self, 'student_handler') and self.student_handler:
+                await self.student_handler.show_achievements(update, context)
+            return
+
+        elif message_text.startswith("👨‍💻 Мой код"):
+            if hasattr(self, 'start_handler') and self.start_handler:
+                await self.start_handler.mycode_command(update, context)
+            return
+
+        elif message_text.startswith("🔗 Привязать ученика"):
+            await update.message.reply_text(
+                "Для привязки аккаунта ученика используйте команду /link с кодом ученика.\n\n"
+                "Пример: /link 123456\n\n"
+                "Код можно получить у ученика, который должен выполнить команду /mycode"
+            )
+            return
+
+        elif message_text.startswith("📊 Отчеты"):
+            context.args = []
+            if hasattr(self, 'parent_handler') and self.parent_handler:
+                await self.parent_handler.get_report(update, context)
+            return
+
+        elif message_text.startswith("⚙️ Настройки") and user_role == "parent":
+            context.args = []
+            if hasattr(self, 'parent_handler') and self.parent_handler:
+                await self.parent_handler.settings(update, context)
+            return
+
+        elif message_text.startswith("👨‍💻 Панель администратора"):
+            if hasattr(self, 'admin_handler') and self.admin_handler:
+                await self.admin_handler.admin_panel(update, context)
+            return
+
+        elif message_text.startswith("➕ Добавить вопрос"):
+            if hasattr(self, 'admin_handler') and self.admin_handler:
+                await self.admin_handler.add_question(update, context)
+            return
+
+        elif message_text.startswith("📁 Импорт вопросов"):
+            if hasattr(self, 'admin_handler') and self.admin_handler:
+                await self.admin_handler.import_questions(update, context)
+            return
+
+        elif message_text.startswith("📤 Экспорт в Excel"):
+            if hasattr(self, 'admin_handler') and self.admin_handler:
+                await self.admin_handler.export_to_excel(update, context)
+            return
+
+        elif message_text.startswith("⚙️ Настройки") and user_role == "admin":
+            # Обработка настроек для администратора
+            if hasattr(self, 'admin_handler') and self.admin_handler:
+                await self.admin_handler.show_bot_settings(update, context)
+            return
+
+        elif message_text.startswith("🔍 Справка"):
+            if hasattr(self, 'start_handler') and self.start_handler:
+                await self.start_handler.help_command(update, context)
+            return
+
         # Проверяем наличие состояния пользователя
         user_state = None
         if "admin_state" in context.user_data:
@@ -586,7 +686,7 @@ class CommonHandler:
             # Можно показать подсказку в зависимости от роли пользователя
             if user_role == "admin":
                 await update.message.reply_text(
-                    "Я не понимаю ваше сообщение. Используйте команду /admin для доступа к панели администратора."
+                    "Я не понимаю ваше сообщение. Используйте команду /admin для доступа к панели администратора или кнопки меню."
                 )
             elif user_role == "student":
                 await update.message.reply_text(
@@ -601,6 +701,7 @@ class CommonHandler:
                     "Я не понимаю ваше сообщение. Пожалуйста, используйте команды или кнопки для взаимодействия."
                     "\n\nДля получения справки введите /help"
                 )
+
 
     async def error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Обработчик ошибок для логирования и информирования пользователя"""
