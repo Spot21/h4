@@ -1,5 +1,5 @@
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import ContextTypes
 from datetime import datetime
 
@@ -9,6 +9,7 @@ from config import ADMINS
 from keyboards.student_kb import student_main_keyboard
 from keyboards.parent_kb import parent_main_keyboard
 from keyboards.admin_kb import admin_main_keyboard
+from keyboards.menu_kb import student_main_menu, parent_main_menu, admin_main_menu, get_bot_commands
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,7 @@ class StartHandler:
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Обработчик команды /start для начала работы с ботом"""
+
         user = update.effective_user
         user_id = user.id
         username = user.username
@@ -62,18 +64,25 @@ class StartHandler:
                 session.add(new_user)
                 session.commit()
 
+                # Устанавливаем команды бота для роли пользователя
+                from keyboards.menu_kb import set_commands_for_user
+                await set_commands_for_user(update.get_bot(), user_id, role or "student")
+
                 # Сообщаем о создании нового аккаунта
                 if role == "admin":
+                    # Отправляем сообщение и устанавливаем постоянную клавиатуру
                     await update.message.reply_text(
                         f"Здравствуйте, {full_name}! 👋\n\n"
                         "Вы зарегистрированы как администратор.\n"
-                        "Используйте команду /admin для доступа к панели управления."
+                        "Используйте команду /admin для доступа к панели управления.",
+                        reply_markup=admin_main_menu()
                     )
                 else:
                     await update.message.reply_text(
                         f"Здравствуйте, {full_name}! 👋\n\n"
                         "Добро пожаловать в бот для проверки знаний по истории.\n"
-                        "Ваш аккаунт успешно создан."
+                        "Ваш аккаунт успешно создан.",
+                        reply_markup=student_main_menu()  # По умолчанию меню ученика
                     )
                     await self.show_main_menu(update, role or "student")
             else:
@@ -83,17 +92,31 @@ class StartHandler:
                 db_user.last_active = datetime.now()
                 session.commit()
 
+                # Устанавливаем команды бота для роли пользователя
+                from keyboards.menu_kb import set_commands_for_user
+                await set_commands_for_user(update.get_bot(), user_id, db_user.role)
+
+                # Выбираем постоянную клавиатуру в зависимости от роли пользователя
+                if db_user.role == "admin":
+                    menu_keyboard = admin_main_menu()
+                elif db_user.role == "parent":
+                    menu_keyboard = parent_main_menu()
+                else:
+                    menu_keyboard = student_main_menu()
+
                 # Приветствуем существующего пользователя
                 if db_user.role == "admin":
                     await update.message.reply_text(
                         f"Здравствуйте, {full_name}! 👋\n\n"
                         "Вы авторизованы как администратор.\n"
-                        "Используйте команду /admin для доступа к панели управления."
+                        "Используйте команду /admin для доступа к панели управления.",
+                        reply_markup=menu_keyboard
                     )
                 else:
                     await update.message.reply_text(
                         f"Здравствуйте, {full_name}! 👋\n\n"
-                        "Рады видеть вас снова в боте для проверки знаний по истории."
+                        "Рады видеть вас снова в боте для проверки знаний по истории.",
+                        reply_markup=menu_keyboard
                     )
                     await self.show_main_menu(update, db_user.role)
 
@@ -186,21 +209,42 @@ class StartHandler:
 
     async def show_main_menu(self, update: Update, role: str) -> None:
         """Показывает основное меню в зависимости от роли пользователя"""
+        user_id = update.effective_user.id
+
+        # Инлайн-клавиатура для сообщения
         if role == "student":
-            # Используем готовую клавиатуру для ученика
-            reply_markup = student_main_keyboard()
+            # Используем готовую инлайн-клавиатуру для ученика
+            inline_markup = student_main_keyboard()
+            # Постоянная клавиатура с кнопками
+            reply_markup = student_main_menu()
         elif role == "parent":
-            # Используем готовую клавиатуру для родителя
-            reply_markup = parent_main_keyboard()
+            # Используем готовую инлайн-клавиатуру для родителя
+            inline_markup = parent_main_keyboard()
+            # Постоянная клавиатура с кнопками
+            reply_markup = parent_main_menu()
         elif role == "admin":
-            # Используем готовую клавиатуру для администратора
-            reply_markup = admin_main_keyboard()
+            # Используем готовую инлайн-клавиатуру для администратора
+            inline_markup = admin_main_keyboard()
+            # Постоянная клавиатура с кнопками
+            reply_markup = admin_main_menu()
         else:
             # Если роль неизвестна, используем клавиатуру ученика по умолчанию
-            reply_markup = student_main_keyboard()
+            inline_markup = student_main_keyboard()
+            reply_markup = student_main_menu()
 
+        # Устанавливаем команды бота в зависимости от роли
+        from keyboards.menu_kb import set_commands_for_user
+        await set_commands_for_user(update.get_bot(), user_id, role)
+
+        # Отправляем сообщение с инлайн-клавиатурой
         await update.message.reply_text(
             "Выберите действие:",
+            reply_markup=inline_markup
+        )
+
+        # Отправляем сообщение с постоянной клавиатурой
+        await update.message.reply_text(
+            "Основное меню (всегда доступно):",
             reply_markup=reply_markup
         )
 
