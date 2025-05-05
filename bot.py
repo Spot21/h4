@@ -95,6 +95,9 @@ class HistoryBot:
             # Установка обработчиков сигналов для корректного завершения
             self._setup_signal_handlers()
 
+            # Инициализация команд бота по умолчанию
+            await self._setup_default_commands()
+
             # Запуск сервиса уведомлений ПОСЛЕ всех инициализаций
             await self.notification_service.start()
 
@@ -119,6 +122,22 @@ class HistoryBot:
             logger.error(traceback.format_exc())
         finally:
             await self.shutdown()
+
+    async def _setup_default_commands(self):
+        """Настройка стандартных команд бота"""
+        try:
+            from keyboards.menu_kb import setup_default_commands
+
+            # Устанавливаем базовый набор команд для всех пользователей
+            success = await setup_default_commands(self.application.bot)
+
+            if success:
+                logger.info("Установлены стандартные команды бота")
+            else:
+                logger.warning("Не удалось установить стандартные команды бота")
+        except Exception as e:
+            logger.error(f"Ошибка при установке стандартных команд бота: {e}")
+            logger.error(traceback.format_exc())
 
     def _initialize_handlers(self):
         """Инициализация обработчиков"""
