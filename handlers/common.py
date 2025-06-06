@@ -720,35 +720,56 @@ class CommonHandler:
                     "\n\nДля получения справки введите /help"
                 )
 
-
     async def error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Обработчик ошибок для логирования и информирования пользователя"""
+        """Улучшенный обработчик ошибок"""
         logger.error(f"Exception while handling an update: {context.error}")
 
-        # Логируем трассировку ошибки
-        tb_list = traceback.format_exception(None, context.error, context.error.__traceback__)
+        # Логируем полную трассировку
+        tb_list = traceback.format_exception(
+            None, context.error, context.error.__traceback__
+        )
         tb_string = "".join(tb_list)
-        logger.error(f"Exception traceback: {tb_string}")
+        logger.error(f"Exception traceback:\n{tb_string}")
 
-        # Отправляем сообщение пользователю
-        if update and hasattr(update, "effective_chat"):
-            # Разные типы ошибок - разные сообщения
-            if isinstance(context.error, telegram.error.BadRequest):
-                message = "Произошла ошибка при отправке сообщения. Пожалуйста, попробуйте еще раз."
-            elif isinstance(context.error, Forbidden):
-                message = "Бот не имеет доступа. Возможно, вы его заблокировали?"
-            elif isinstance(context.error, telegram.error.TimedOut):
-                message = "Истекло время ожидания ответа от серверов Telegram. Пожалуйста, попробуйте снова."
+        # Определяем тип обновления
+        if update:
+            if hasattr(update, 'effective_chat'):
+                chat_id = update.effective_chat.id
+            elif hasattr(update, 'callback_query') and update.callback_query:
+                chat_id = update.callback_query.message.chat.id
             else:
-                message = "Произошла ошибка при обработке вашего запроса. Пожалуйста, попробуйте еще раз или обратитесь к администратору."
+                chat_id = None
 
-            try:
-                await context.bot.send_message(
-                    chat_id=update.effective_chat.id,
-                    text=message
+            if chat_id:
+                # Специфичные сообщения для разных типов ошибок
+                error_messages = {
+                    telegram.error.BadRequest: "Произошла ошибка при обработке запроса. Попробуйте еще раз.",
+                    telegram.error.Forbidden: "Бот не имеет доступа. Проверьте настройки приватности.",
+                    telegram.error.TimedOut: "Превышено время ожидания. Попробуйте позже.",
+                    telegram.error.NetworkError: "Проблема с сетью. Проверьте подключение.",
+                    telegram.error.ChatMigrated: "Чат был перенесен. Обновите данные.",
+                    telegram.error.RetryAfter: "Слишком много запросов. Подождите немного.",
+                }
+
+                # Получаем сообщение для конкретного типа ошибки
+                message = error_messages.get(
+                    type(context.error),
+                    "Произошла неожиданная ошибка. Пожалуйста, попробуйте позже."
                 )
-            except Exception as e:
-                logger.error(f"Не удалось отправить сообщение об ошибке: {e}")
+
+                try:
+                    # Пытаемся отправить сообщение об ошибке
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=f"❌ {message}",
+                        parse_mode=None  # Без форматирования для избежания ошибок
+                    )
+                except Exception as send_error:
+                    logger.error(f"Failed to send error message: {send_error}")
+
+        # Специальная обработка для критических ошибок
+        if isinstance(context.error, (MemoryError, SystemError)):
+            logger.critical(f"Critical error occurred: {context.error}")
 
     async def show_leaderboard(self, update: Update, context: ContextTypes.DEFAULT_TYPE, period=None) -> None:
         """Показать таблицу лидеров"""
