@@ -22,8 +22,10 @@ class QuizService:
     def __init__(self):
         self.active_quizzes = {}
         self._auto_save_task = None
-        self._save_lock = asyncio.Lock()  # Блокировка для безопасного сохранения
-        self.cache = CacheService()  # Добавляем кеш
+        self._save_lock = asyncio.Lock()
+        self.cache = CacheService()
+        self.notification_service = None  # Будет установлен позже
+        logger.info("QuizService инициализирован")
 
     async def start(self):
         """Запуск сервиса"""
