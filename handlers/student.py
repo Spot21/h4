@@ -1,6 +1,6 @@
 import logging
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
@@ -316,7 +316,7 @@ class StudentHandler:
         remaining_time = "Неизвестно"
         quiz_data = self.quiz_service.active_quizzes[user_id]
         if "end_time" in quiz_data:
-            time_left = quiz_data["end_time"] - datetime.now()
+            time_left = quiz_data["end_time"] - datetime.now(timezone.utc)
             if time_left.total_seconds() > 0:
                 minutes = int(time_left.total_seconds() // 60)
                 seconds = int(time_left.total_seconds() % 60)
