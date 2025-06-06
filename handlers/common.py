@@ -419,21 +419,34 @@ class CommonHandler:
                 student_handler = StudentHandler(self.quiz_service)
                 await student_handler.handle_test_button(update, context)
 
+
             elif callback_data.startswith("common_start_test") or callback_data == "common_start_test":
                 logger.debug(f"Перенаправление на start_test")
-
-                # Получаем quiz_service из контекста приложения
-                quiz_service = context.application.bot_data.get("quiz_service")
-
-                if quiz_service and hasattr(self, 'student_handler') and self.student_handler:
-                    # Убеждаемся, что student_handler использует правильный quiz_service
-                    if self.student_handler.quiz_service != quiz_service:
-                        self.student_handler.quiz_service = quiz_service
-
+                try:
+                    # Проверяем доступность quiz_service
+                    if not hasattr(self, 'quiz_service') or self.quiz_service is None:
+                        logger.error("Quiz service отсутствует в CommonHandler")
+                        await query.edit_message_text(
+                            "Произошла ошибка при запуске теста. Пожалуйста, перезапустите бота или обратитесь к администратору."
+                        )
+                        return
+                    # Проверяем наличие student_handler
+                    if not hasattr(self, 'student_handler') or self.student_handler is None:
+                        # Создаем новый экземпляр StudentHandler с имеющимся quiz_service
+                        from handlers.student import StudentHandler
+                        self.student_handler = StudentHandler(self.quiz_service)
+                        logger.info("Создан новый экземпляр StudentHandler")
+                    # Проверяем, что у student_handler есть quiz_service
+                    if not hasattr(self.student_handler, 'quiz_service') or self.student_handler.quiz_service is None:
+                        self.student_handler.quiz_service = self.quiz_service
+                        logger.info("Установлен quiz_service в StudentHandler")
+                    # Вызываем метод start_test
                     context.user_data["from_button"] = True
                     await self.student_handler.start_test(update, context)
-                else:
-                    logger.error("Quiz service или student_handler не инициализированы")
+
+                except Exception as e:
+                    logger.error(f"Ошибка при обработке start_test: {e}")
+                    logger.error(traceback.format_exc())
                     await query.edit_message_text(
                         "Произошла ошибка при запуске теста. Пожалуйста, попробуйте позже."
                     )
