@@ -419,6 +419,25 @@ class CommonHandler:
                 student_handler = StudentHandler(self.quiz_service)
                 await student_handler.handle_test_button(update, context)
 
+            elif callback_data.startswith("common_start_test") or callback_data == "common_start_test":
+                logger.debug(f"Перенаправление на start_test")
+
+                # Получаем quiz_service из контекста приложения
+                quiz_service = context.application.bot_data.get("quiz_service")
+
+                if quiz_service and hasattr(self, 'student_handler') and self.student_handler:
+                    # Убеждаемся, что student_handler использует правильный quiz_service
+                    if self.student_handler.quiz_service != quiz_service:
+                        self.student_handler.quiz_service = quiz_service
+
+                    context.user_data["from_button"] = True
+                    await self.student_handler.start_test(update, context)
+                else:
+                    logger.error("Quiz service или student_handler не инициализированы")
+                    await query.edit_message_text(
+                        "Произошла ошибка при запуске теста. Пожалуйста, попробуйте позже."
+                    )
+
             elif (callback_data.startswith("quiz_answer_") or
                   callback_data.startswith("quiz_seq_") or
                   callback_data.startswith("quiz_reset_") or
