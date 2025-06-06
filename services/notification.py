@@ -21,6 +21,7 @@ class NotificationService:
 
     def __init__(self, application: Application):
         """Инициализация сервиса уведомлений"""
+        self.process_notifications = None
         self.application = application
         if self.application is None:
             logger.critical("Application объект в NotificationService равен None! Уведомления работать не будут.")
