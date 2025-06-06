@@ -33,8 +33,8 @@ class User(Base):
     full_name = Column(String, nullable=True)  # Это будет введенные Имя и Фамилия
     role = Column(String, nullable=False)  # student, parent, admin
     user_group = Column(String, nullable=True)  # Новое поле для класса ученика
-    created_at = Column(DateTime, default=datetime.now(timezone.utc))
-    last_active = Column(DateTime, default=datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    last_active = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     settings = Column(String, nullable=True)  # JSON строка с настройками пользователя
 
     # Отношения
