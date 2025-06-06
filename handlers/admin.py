@@ -3,7 +3,7 @@ import json
 import os
 import asyncio
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone
 
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
@@ -339,14 +339,17 @@ class AdminHandler:
 
         try:
             with get_session() as session:
-                # Получаем список тем с созданием копии данных
+                # ВАЖНО: Создаем копии данных, пока сессия активна
                 topics_data = []
                 for topic in session.query(Topic).all():
+                    # Копируем все необходимые данные
                     topics_data.append({
                         "id": topic.id,
                         "name": topic.name,
-                        "description": topic.description
+                        "description": topic.description,
+                        # Добавляем другие поля если нужно
                     })
+                # Сессия закроется автоматически при выходе из with блока
 
             # Форматируем текст со списком тем
             topics_text = "✏️ *Темы для тестирования*\n\n"
@@ -1525,13 +1528,13 @@ class AdminHandler:
             # Генерируем файл в зависимости от типа
             if export_type == "results":
                 buffer = excel_service.export_test_results(period or "all")
-                filename = f"test_results_{period or 'all'}_{datetime.now().strftime('%Y%m%d')}.xlsx"
+                filename = f"test_results_{period or 'all'}_{datetime.now(timezone.utc).strftime('%Y%m%d')}.xlsx"
             elif export_type == "topics":
                 buffer = excel_service.export_topic_statistics()
-                filename = f"topic_statistics_{datetime.now().strftime('%Y%m%d')}.xlsx"
+                filename = f"topic_statistics_{datetime.now(timezone.utc).strftime('%Y%m%d')}.xlsx"
             elif export_type == "students":
                 buffer = excel_service.export_student_progress()
-                filename = f"student_progress_{datetime.now().strftime('%Y%m%d')}.xlsx"
+                filename = f"student_progress_{datetime.now(timezone.utc).strftime('%Y%m%d')}.xlsx"
             else:
                 await query.edit_message_text("Неизвестный тип экспорта.")
                 return
@@ -1544,7 +1547,7 @@ class AdminHandler:
                 chat_id=user_id,
                 document=buffer,
                 filename=filename,
-                caption=f"📊 Экспорт данных: {export_type}\n{datetime.now().strftime('%d.%m.%Y %H:%M')}"
+                caption=f"📊 Экспорт данных: {export_type}\n{datetime.now(timezone.utc).strftime('%d.%m.%Y %H:%M')}"
             )
 
         except Exception as e:
