@@ -1,7 +1,7 @@
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import ContextTypes
-from datetime import datetime
+from datetime import datetime, timezone
 
 from database.models import User
 from database.db_manager import get_session
@@ -58,8 +58,8 @@ class StartHandler:
                     username=username,
                     full_name=full_name,
                     role=role or "student",  # По умолчанию считаем ученика
-                    created_at=datetime.now(),
-                    last_active=datetime.now()
+                    created_at=datetime.now(timezone.utc),
+                    last_active=datetime.now(timezone.utc)
                 )
                 session.add(new_user)
                 session.commit()
@@ -89,7 +89,7 @@ class StartHandler:
                 # Обновляем информацию о пользователе
                 db_user.username = username
                 db_user.full_name = full_name
-                db_user.last_active = datetime.now()
+                db_user.last_active = datetime.now(timezone.utc)
                 session.commit()
 
                 # Устанавливаем команды бота для роли пользователя
