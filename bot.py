@@ -72,6 +72,11 @@ class HistoryBot:
             # Инициализация сервисов
             self.quiz_service = QuizService()
             self.parent_service = ParentService()
+            if self.quiz_service is None:
+                logger.error("КРИТИЧЕСКАЯ ОШИБКА: quiz_service не инициализирован!")
+                raise Exception("Не удалось инициализировать quiz_service")
+            else:
+                logger.info("quiz_service успешно инициализирован")
 
             # создаем сервис уведомлений с готовым application
             self.notification_service = NotificationService(self.application)
@@ -89,6 +94,9 @@ class HistoryBot:
 
             # Восстанавливаем состояние активных тестов
             self.quiz_service.restore_active_quizzes()
+            # Запускаем сервисы асинхронно
+            await self.quiz_service.start()
+            logger.info("quiz_service запущен")
 
             # Запускаем автосохранение
             await self.quiz_service.start_auto_save()
