@@ -3,10 +3,10 @@ import asyncio
 import json
 import traceback
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
-# Обновляем импорты для современной версии python-telegram-bot
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.error import BadRequest, Forbidden, TelegramError
+from telegram.error import BadRequest, Forbidden, TelegramError, TimedOut, NetworkError
 from telegram.ext import Application
 
 from database.models import User, Notification
@@ -28,6 +28,9 @@ class NotificationService:
         self.scheduler = None
         self._running = False
         self.parent_service = ParentService()
+        # Добавляем очередь для уведомлений
+        self._notification_queue = asyncio.Queue()
+        self._worker_task = None
 
     async def start(self):
         """Запуск планировщика уведомлений"""
@@ -40,43 +43,57 @@ class NotificationService:
                 logger.critical("Cannot start notification service: application is None")
                 return
 
+            # Запускаем воркер для обработки уведомлений
+            self._worker_task = asyncio.create_task(self._notification_worker())
+
             # Создаем планировщик
             from apscheduler.schedulers.asyncio import AsyncIOScheduler
-            self.scheduler = AsyncIOScheduler()
+            from apscheduler.job import Job
 
-            # Добавляем задачи с использованием асинхронных функций
+            self.scheduler = AsyncIOScheduler(
+                # Добавляем настройки для избежания проблем с timezone
+                timezone='UTC',
+                job_defaults={
+                    'coalesce': True,
+                    'max_instances': 1,
+                    'misfire_grace_time': 30
+                }
+            )
+
+            # Добавляем задачи
             self.scheduler.add_job(
                 self.process_notifications,
                 'interval',
                 minutes=2,
-                id='process_notifications'
+                id='process_notifications',
+                replace_existing=True
             )
+
             self.scheduler.add_job(
                 self.send_weekly_reports,
                 'cron',
                 day_of_week='sun',
                 hour=10,
-                id='send_weekly_reports'
+                minute=0,
+                id='send_weekly_reports',
+                replace_existing=True
             )
-            # Добавляем ежемесячные отчеты
+
             self.scheduler.add_job(
                 self.send_monthly_reports,
                 'cron',
-                day=1,  # Первое число каждого месяца
+                day=1,
                 hour=10,
-                id='send_monthly_reports'
-            )
-            self.scheduler.add_job(
-                self.send_reminders,
-                'cron',
-                hour=18,
-                id='send_reminders'
+                minute=0,
+                id='send_monthly_reports',
+                replace_existing=True
             )
 
             # Запускаем планировщик
             self.scheduler.start()
             self._running = True
-            logger.info("Notification scheduler started")
+            logger.info("Notification scheduler started successfully")
+
         except Exception as e:
             logger.error(f"Error starting notification scheduler: {e}")
             logger.error(traceback.format_exc())
@@ -135,7 +152,7 @@ class NotificationService:
                                 title=f"Ежемесячный отчет по ученику {student.full_name or student.username}",
                                 message="Ваш ежемесячный отчет об успеваемости ученика готов. Используйте команду /report для просмотра.",
                                 notification_type="report",
-                                scheduled_at=datetime.now()
+                                scheduled_at=datetime.now(timezone.utc)
                             )
                             session.add(notification)
                             logger.info(
@@ -168,105 +185,111 @@ class NotificationService:
     async def stop(self):
         """Остановка планировщика уведомлений"""
         try:
-            if self.scheduler and self._running:
-                self.scheduler.shutdown(wait=True)  # Изменено на wait=True для более безопасного завершения
-                self._running = False
+            self._running = False
+
+            # Останавливаем воркер
+            if self._worker_task:
+                self._worker_task.cancel()
+                try:
+                    await self._worker_task
+                except asyncio.CancelledError:
+                    pass
+
+            # Останавливаем планировщик
+            if self.scheduler:
+                self.scheduler.shutdown(wait=False)
                 logger.info("Notification scheduler stopped")
+
         except Exception as e:
             logger.error(f"Error stopping notification scheduler: {e}")
             logger.error(traceback.format_exc())
 
-    async def process_notifications(self):
-        """Обработка и отправка запланированных уведомлений"""
-        if not self._running:
-            logger.warning("Notification service is not running")
-            return
+    async def _notification_worker(self):
+        """Воркер для асинхронной обработки уведомлений из очереди"""
+        while self._running:
+            try:
+                # Получаем уведомление из очереди с таймаутом
+                notification_data = await asyncio.wait_for(
+                    self._notification_queue.get(),
+                    timeout=1.0
+                )
 
-        if self.application is None:
-            logger.error("Cannot process notifications: application is None")
-            return
+                # Обрабатываем уведомление
+                await self._process_single_notification(notification_data)
 
+            except asyncio.TimeoutError:
+                # Таймаут - это нормально, продолжаем цикл
+                continue
+            except asyncio.CancelledError:
+                # Воркер отменен - выходим
+                break
+            except Exception as e:
+                logger.error(f"Error in notification worker: {e}")
+                logger.error(traceback.format_exc())
+                # Небольшая пауза при ошибке
+                await asyncio.sleep(1)
+
+    async def _process_single_notification(self, notification_data: dict):
+        """Обработка одного уведомления"""
         try:
-            logger.info("Запущена обработка уведомлений")
-            processed_count = 0
-            failed_count = 0
+            chat_id = notification_data['chat_id']
+            title = notification_data['title']
+            message = notification_data['message']
+            notification_type = notification_data['notification_type']
+            notification_id = notification_data.get('notification_id')
 
-            with get_session() as session:
-                # Получаем все непрочитанные уведомления
-                current_time = datetime.now(timezone.utc)
-                notifications = session.query(Notification).filter(
-                    Notification.is_read == False,
-                    (Notification.scheduled_at <= current_time) |
-                    (Notification.scheduled_at == None)
-                ).all()
+            # Отправляем с улучшенной обработкой ошибок
+            success = await self._send_notification_with_retry(
+                chat_id, title, message, notification_type
+            )
 
-                logger.info(f"Найдено {len(notifications)} необработанных уведомлений")
-
-                for notification in notifications:
-                    # Получаем пользователя
-                    user = session.query(User).get(notification.user_id)
-                    if not user:
-                        logger.warning(f"Пользователь не найден для уведомления {notification.id}")
-                        # Не отмечаем как прочитанное, могут быть проблемы с БД
-                        continue
-
-                    # Отправляем уведомление с повторными попытками
-                    success = await self._send_notification_with_retry(
-                        user.telegram_id,
-                        notification.title,
-                        notification.message,
-                        notification.notification_type
-                    )
-
-                    if success:
-                        # Только при успешной отправке отмечаем как прочитанное
-                        notification.is_read = True
-                        processed_count += 1
-                        logger.info(f"Уведомление {notification.id} отправлено пользователю {user.telegram_id}")
-                    else:
-                        # Увеличиваем счетчик неудачных попыток или добавляем его, если не существует
-                        if not hasattr(notification, 'retry_count'):
-                            notification.retry_count = 1
-                        else:
-                            notification.retry_count += 1
-
-                        # Если превышено максимальное количество попыток (5), отмечаем как прочитанное
-                        if getattr(notification, 'retry_count', 0) >= 5:
-                            notification.is_read = True
-                            logger.warning(
-                                f"Уведомление {notification.id} отмечено как прочитанное после 5 неудачных попыток")
-
-                        failed_count += 1
-
-                # Сохраняем изменения
-                session.commit()
-                logger.info(f"Обработка уведомлений завершена. Успешно: {processed_count}, Неудачно: {failed_count}")
+            # Обновляем статус в БД если есть ID
+            if notification_id and success:
+                await self._mark_notification_as_read(notification_id)
 
         except Exception as e:
-            logger.error(f"Ошибка процесса обработки уведомлений: {e}")
-            logger.error(traceback.format_exc())
+            logger.error(f"Error processing notification: {e}")
 
-    async def _send_notification_with_retry(self, chat_id: int, title: str, message: str, notification_type: str,
+    async def _mark_notification_as_read(self, notification_id: int):
+        """Асинхронная отметка уведомления как прочитанного"""
+        try:
+            # Используем asyncio.to_thread для синхронной операции с БД
+            def mark_read():
+                with get_session() as session:
+                    notification = session.query(Notification).get(notification_id)
+                    if notification:
+                        notification.is_read = True
+                        session.commit()
+
+            await asyncio.to_thread(mark_read)
+
+        except Exception as e:
+            logger.error(f"Error marking notification as read: {e}")
+
+    async def _send_notification_with_retry(self, chat_id: int, title: str,
+                                            message: str, notification_type: str,
                                             max_retries: int = 3) -> bool:
-        """Отправка уведомления с повторными попытками"""
+        """Улучшенная отправка уведомления с обработкой всех типов ошибок"""
         if self.application is None:
-            logger.error(f"Cannot send notification: application is None")
+            logger.error("Cannot send notification: application is None")
             return False
 
         for attempt in range(max_retries):
             try:
-                # Пытаемся отправить сообщение
-                await self.application.bot.send_message(
+                # Отправляем основное сообщение
+                sent_message = await self.application.bot.send_message(
                     chat_id=chat_id,
                     text=f"*{title}*\n\n{message}",
-                    parse_mode="Markdown"
+                    parse_mode="Markdown",
+                    disable_notification=False
                 )
 
-                # Если это уведомление об отчете, добавляем специальную кнопку
-                if notification_type == "report":
-                    keyboard = [
-                        [InlineKeyboardButton("📊 Посмотреть отчет", callback_data="common_reports")]
-                    ]
+                # Если это уведомление об отчете, добавляем кнопку
+                if notification_type == "report" and sent_message:
+                    keyboard = [[
+                        InlineKeyboardButton("📊 Посмотреть отчет",
+                                             callback_data="common_reports")
+                    ]]
                     reply_markup = InlineKeyboardMarkup(keyboard)
 
                     await self.application.bot.send_message(
@@ -275,38 +298,76 @@ class NotificationService:
                         reply_markup=reply_markup
                     )
 
-                return True  # Успешная отправка
+                return True
 
-            except BadRequest as bad_request:
-                logger.warning(
-                    f"BadRequest при отправке уведомления (попытка {attempt + 1}/{max_retries}): {bad_request}")
+            except BadRequest as e:
+                error_msg = str(e).lower()
+                logger.warning(f"BadRequest при отправке уведомления: {e}")
 
-                # Если ошибка связана с форматированием, пытаемся отправить без разметки
-                if "can't parse entities" in str(bad_request).lower():
+                # Обработка специфичных ошибок
+                if "can't parse entities" in error_msg:
+                    # Пробуем отправить без форматирования
                     try:
                         await self.application.bot.send_message(
                             chat_id=chat_id,
                             text=f"{title}\n\n{message}"
                         )
-                        return True  # Успешная отправка без разметки
-                    except Exception as retry_error:
-                        logger.error(f"Ошибка повторной отправки без разметки: {retry_error}")
+                        return True
+                    except Exception:
+                        pass
 
-                # Если это не последняя попытка, ждем перед повторением
+                elif "chat not found" in error_msg:
+                    logger.error(f"Chat {chat_id} not found")
+                    return False
+
+            except Forbidden as e:
+                logger.warning(f"Bot blocked by user {chat_id}: {e}")
+                # Можно пометить пользователя как заблокировавшего бота
+                await self._mark_user_as_blocked(chat_id)
+                return False
+
+            except TimedOut as e:
+                logger.warning(f"Timeout sending to {chat_id}, attempt {attempt + 1}")
                 if attempt < max_retries - 1:
-                    await asyncio.sleep(1)  # Пауза перед следующей попыткой
+                    await asyncio.sleep(2 ** attempt)  # Экспоненциальная задержка
 
-            except Forbidden:
-                logger.warning(f"Пользователь {chat_id} заблокировал бота")
-                return False  # Не пытаемся повторить, если бот заблокирован
+            except NetworkError as e:
+                logger.error(f"Network error: {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(5)  # Пауза при сетевой ошибке
 
             except Exception as e:
-                logger.error(f"Ошибка отправки уведомления: {e}")
-                # Если это не последняя попытка, ждем перед повторением
+                logger.error(f"Unexpected error sending notification: {e}")
+                logger.error(traceback.format_exc())
+
                 if attempt < max_retries - 1:
                     await asyncio.sleep(1)
 
-        return False  # Все попытки неудачны
+        return False
+
+    async def _mark_user_as_blocked(self, telegram_id: int):
+        """Отметка пользователя как заблокировавшего бота"""
+        try:
+            def update_user():
+                with get_session() as session:
+                    user = session.query(User).filter(
+                        User.telegram_id == telegram_id
+                    ).first()
+                    if user and user.settings:
+                        try:
+                            settings = json.loads(user.settings)
+                        except json.JSONDecodeError:
+                            settings = {}
+
+                        settings['bot_blocked'] = True
+                        settings['blocked_at'] = datetime.now(timezone.utc).isoformat()
+                        user.settings = json.dumps(settings)
+                        session.commit()
+
+            await asyncio.to_thread(update_user)
+
+        except Exception as e:
+            logger.error(f"Error marking user as blocked: {e}")
 
     async def send_weekly_reports(self):
         """Отправка еженедельных отчетов родителям"""
@@ -329,7 +390,7 @@ class NotificationService:
         try:
             with get_session() as session:
                 # Получаем всех учеников, которые не проходили тест более недели
-                week_ago = datetime.now() - timedelta(days=7)
+                week_ago = datetime.now(timezone.utc) - timedelta(days=7)
                 inactive_students = session.query(User).filter(
                     User.role == "student",
                     User.last_active < week_ago
@@ -391,7 +452,7 @@ class NotificationService:
                 session.commit()
 
                 # Если уведомление нужно отправить сейчас, запускаем обработку
-                if scheduled_at is None or scheduled_at <= datetime.now():
+                if scheduled_at is None or scheduled_at <= datetime.now(timezone.utc):
                     await self.process_notifications()
 
                 return True
@@ -490,7 +551,7 @@ class NotificationService:
                             title=title,
                             message=message,
                             notification_type="test_result",
-                            scheduled_at=datetime.now()  # Устанавливаем текущую дату
+                            scheduled_at=datetime.now(timezone.utc)  # Устанавливаем текущую дату
                         )
                         session.add(notification)
                         notifications_created = True
