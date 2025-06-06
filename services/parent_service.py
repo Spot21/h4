@@ -2,7 +2,7 @@ import json
 import logging
 import pandas as pd
 import matplotlib.pyplot as plt
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from typing import List, Dict, Any, Optional, Tuple
 import traceback
@@ -41,7 +41,6 @@ class ParentService:
                     return {"success": False, "message": "Только родители могут привязывать учеников"}
 
                 # Проверяем, что ученик с таким кодом существует
-                # Код пока примитивный - это просто строка с telegram_id ученика
                 try:
                     student_telegram_id = int(student_code)
                 except ValueError:
@@ -310,7 +309,7 @@ class ParentService:
                     return {"success": False, "message": "Ученик не найден среди привязанных учеников"}
 
                 # Определяем временной интервал для отчета
-                now = datetime.utcnow()
+                now = datetime.now(timezone.utc)
                 if period == "week":
                     start_date = now - timedelta(days=7)
                 elif period == "month":
@@ -491,7 +490,7 @@ class ParentService:
                             continue
 
                         # Проверяем, нужно ли отправлять отчет сегодня (например, каждое воскресенье)
-                        today = datetime.utcnow()
+                        today = datetime.now(timezone.utc)
                         if today.weekday() != 6:  # 6 - воскресенье
                             continue
 
@@ -657,7 +656,7 @@ class ParentService:
                                 title=f"Еженедельный отчет по ученику {student.full_name or student.username}",
                                 message="Ваш еженедельный отчет об успеваемости ученика готов. Используйте команду /report для просмотра.",
                                 notification_type="report",
-                                scheduled_at=datetime.utcnow()
+                                scheduled_at=datetime.now(timezone.utc)
                             )
                             session.add(notification)
                             logger.info(
@@ -676,5 +675,6 @@ class ParentService:
         except Exception as e:
             logger.error(f"Error sending weekly reports: {e}")
             logger.error(traceback.format_exc())
+
 
 
