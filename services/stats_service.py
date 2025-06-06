@@ -2,7 +2,7 @@ import json
 import pandas as pd
 import matplotlib.pyplot as plt
 from io import BytesIO
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any
 import logging
 
@@ -22,7 +22,7 @@ def get_user_stats(user_id: int, period: str = "all") -> Dict[str, Any]:
                 return {"success": False, "message": "Пользователь не найден"}
 
             # Определяем временной интервал
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             if period == "week":
                 start_date = now - timedelta(days=7)
             elif period == "month":
@@ -176,7 +176,81 @@ def get_user_stats(user_id: int, period: str = "all") -> Dict[str, Any]:
         return {"success": False, "message": f"Ошибка при получении статистики: {str(e)}"}
 
 
-# Добавить в файл services/stats_service.py
+def get_user_stats_optimized(user_id: int, period: str = "all") -> Dict[str, Any]:
+    """Оптимизированное получение статистики пользователя"""
+    try:
+        with get_session() as session:
+            # Используем один оптимизированный запрос с JOIN
+            from sqlalchemy import and_, func
+            from sqlalchemy.orm import joinedload
+
+            # Находим пользователя
+            user = session.query(User).filter(User.telegram_id == user_id).first()
+            if not user:
+                return {"success": False, "message": "Пользователь не найден"}
+
+            # Определяем временной интервал
+            now = datetime.now(timezone.utc)
+            start_date = get_period_start_date(period, now)
+
+            # Один запрос для получения всех результатов с информацией о темах
+            results = (
+                session.query(TestResult)
+                .options(joinedload(TestResult.topic))  # Загружаем темы сразу
+                .filter(
+                    and_(
+                        TestResult.user_id == user.id,
+                        TestResult.completed_at >= start_date
+                    )
+                )
+                .order_by(TestResult.completed_at)
+                .all()
+            )
+
+            if not results:
+                return {
+                    "success": True,
+                    "has_data": False,
+                    "message": f"За выбранный период ({period}) нет результатов тестов"
+                }
+
+            # Агрегированные данные одним запросом
+            stats_query = (
+                session.query(
+                    func.count(TestResult.id).label('total_tests'),
+                    func.avg(TestResult.percentage).label('avg_score'),
+                    func.max(TestResult.percentage).label('max_score'),
+                    func.min(TestResult.percentage).label('min_score'),
+                    func.sum(TestResult.time_spent).label('total_time')
+                )
+                .filter(
+                    and_(
+                        TestResult.user_id == user.id,
+                        TestResult.completed_at >= start_date
+                    )
+                )
+                .first()
+            )
+
+            # Формируем результат
+            return {
+                "success": True,
+                "has_data": True,
+                "stats": {
+                    "total_tests": stats_query.total_tests or 0,
+                    "average_score": round(stats_query.avg_score or 0, 1),
+                    "max_score": round(stats_query.max_score or 0, 1),
+                    "min_score": round(stats_query.min_score or 0, 1),
+                    "total_time_spent": (stats_query.total_time or 0) // 60
+                },
+                "results": results  # Уже содержат информацию о темах
+            }
+
+    except Exception as e:
+        logger.error(f"Error getting user stats: {e}")
+        return {"success": False, "message": str(e)}
+
+
 
 def get_problematic_questions(limit: int = 10) -> Dict[str, Any]:
     """Получение списка самых проблемных вопросов (с наибольшим процентом ошибок)"""
@@ -343,7 +417,7 @@ def update_user_stats(user_id: int) -> Dict[str, Any]:
                     return {"success": False, "message": "Пользователь не найден"}
 
                 # Обновляем время последней активности
-                user.last_active = datetime.now()
+                user.last_active = datetime.now(timezone.utc)
 
                 # Можно добавить дополнительные обновления статистики,
                 # например, общее время в системе, количество пройденных тестов и т.д.
@@ -368,7 +442,7 @@ def generate_leaderboard(period: str = "week", limit: int = 10) -> Dict[str, Any
     try:
         with get_session() as session:
             # Определяем временной интервал
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             if period == "week":
                 start_date = now - timedelta(days=7)
             elif period == "month":
