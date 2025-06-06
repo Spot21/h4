@@ -89,6 +89,9 @@ class HistoryBot:
             # Восстанавливаем состояние активных тестов
             self.quiz_service.restore_active_quizzes()
 
+            # Запускаем автосохранение
+            await self.quiz_service.start_auto_save()
+
             # Регистрация обработчиков команд
             self._register_handlers()
 
@@ -241,36 +244,36 @@ class HistoryBot:
         logger.info(f"Shutting down bot{f' (signal: {signal_name})' if signal_name else ''}")
         self.running = False
 
-        # Устанавливаем событие, чтобы завершить основной цикл
+        # Устанавливаем событие завершения
         if self._shutdown_event:
             self._shutdown_event.set()
 
         try:
-            # Сохраняем состояние активных тестов
+            # Останавливаем автосохранение
             if self.quiz_service:
-                try:
-                    self.quiz_service.save_active_quizzes()
-                    logger.info("Active quizzes state saved")
-                except Exception as quiz_error:
-                    logger.error(f"Error saving quiz state: {quiz_error}")
+                await self.quiz_service.stop_auto_save()
+                # Финальное сохранение
+                self.quiz_service.save_active_quizzes()
+                logger.info("Final quiz state saved")
 
+            # Останавливаем уведомления
             if self.notification_service:
                 await self.notification_service.stop()
 
+            # Останавливаем polling
             if self.application and self.application.updater.running:
                 await self.application.updater.stop()
 
+            # Останавливаем application
             if self.application:
                 await self.application.stop()
                 await self.application.shutdown()
 
             logger.info("Bot shutdown complete")
 
-
         except Exception as e:
             logger.error(f"Error during shutdown: {e}")
             logger.error(traceback.format_exc())
-
 
 async def main():
     """Запуск бота"""
