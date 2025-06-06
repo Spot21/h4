@@ -261,29 +261,38 @@ class QuizService:
         except Exception as e:
             logger.error(f"Error in cleanup: {e}")
 
-    def get_topics(self) -> List[Dict[str, Any]]:
-        """Получение списка всех доступных тем для тестирования"""
-        """Получение списка тем с кешированием"""
-        loop = asyncio.get_event_loop()
-        return loop.run_until_complete(self.get_topics_async())
-
     async def get_topics_async(self) -> List[Dict[str, Any]]:
-        """Асинхронное получение списка тем с кешированием"""
-        cache_key = "topics:all"
+        """Асинхронное получение списка тем"""
+        try:
+            # Используем asyncio.to_thread для синхронной операции с БД
+            def fetch_topics():
+                with get_session() as session:
+                    topics = session.query(Topic).all()
+                    return [
+                        {
+                            "id": t.id,
+                            "name": t.name,
+                            "description": t.description
+                        }
+                        for t in topics
+                    ]
 
-        def fetch_topics():
-            with get_session() as session:
-                topics = session.query(Topic).all()
-                return [
-                    {
-                        "id": t.id,
-                        "name": t.name,
-                        "description": t.description
-                    }
-                    for t in topics
-                ]
+            return await asyncio.to_thread(fetch_topics)
+        except Exception as e:
+            logger.error(f"Error fetching topics: {e}")
+            return []
 
-        return await self.cache.get_or_set(cache_key, fetch_topics, ttl=600)  # 10 минут
+    def get_topics(self) -> List[Dict[str, Any]]:
+        """Синхронная обертка для совместимости"""
+        try:
+            loop = asyncio.get_running_loop()
+            # Создаем задачу в текущем loop
+            future = asyncio.ensure_future(self.get_topics_async())
+            # Используем run_in_executor для избежания блокировки
+            return loop.run_until_complete(future)
+        except RuntimeError:
+            # Если нет запущенного loop, создаем новый
+            return asyncio.run(self.get_topics_async())
 
     def start_quiz(self, user_id: int, topic_id: int, question_count: int = None) -> Dict[str, Any]:
         """Начать новый тест для пользователя"""
