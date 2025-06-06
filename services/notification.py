@@ -100,6 +100,51 @@ class NotificationService:
             logger.error(traceback.format_exc())
             self._running = False
 
+    async def process_notifications(self):
+        """Обработка запланированных уведомлений"""
+        if not self._running:
+            return
+
+        try:
+            logger.info("Processing scheduled notifications")
+
+            with get_session() as session:
+                # Получаем все неотправленные уведомления, время которых наступило
+                notifications = session.query(Notification).filter(
+                    Notification.is_read == False,
+                    Notification.scheduled_at <= datetime.now(timezone.utc)
+                ).all()
+
+                for notification in notifications:
+                    try:
+                        # Получаем пользователя
+                        user = session.query(User).get(notification.user_id)
+                        if not user:
+                            logger.warning(f"User {notification.user_id} not found for notification {notification.id}")
+                            notification.is_read = True
+                            continue
+
+                        # Добавляем в очередь для отправки
+                        await self._notification_queue.put({
+                            'chat_id': user.telegram_id,
+                            'title': notification.title,
+                            'message': notification.message,
+                            'notification_type': notification.notification_type,
+                            'notification_id': notification.id
+                        })
+
+                        logger.info(f"Notification {notification.id} added to queue for user {user.telegram_id}")
+
+                    except Exception as e:
+                        logger.error(f"Error processing notification {notification.id}: {e}")
+                        logger.error(traceback.format_exc())
+
+                # Сохраняем изменения
+                session.commit()
+
+        except Exception as e:
+            logger.error(f"Error in process_notifications: {e}")
+            logger.error(traceback.format_exc())
 
     async def send_monthly_reports(self):
         """Отправка ежемесячных отчетов родителям"""
