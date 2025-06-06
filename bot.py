@@ -84,6 +84,7 @@ class HistoryBot:
 
             # Сохраняем ссылки в контексте приложения
             self.application.bot_data["handlers"] = self.handlers
+            self.application.bot_data["quiz_service"] = self.quiz_service  # Добавляем для доступа
 
 
             # Восстанавливаем состояние активных тестов
