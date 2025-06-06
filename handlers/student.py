@@ -19,25 +19,18 @@ from keyboards.student_kb import (
 logger = logging.getLogger(__name__)
 
 class StudentHandler:
-    def __init__(self, quiz_service: QuizService = None):
+    def __init__(self, quiz_service: QuizService):
         """
         Инициализация обработчика студента
 
         Args:
-            quiz_service: Сервис для работы с тестами
+            quiz_service: Сервис для работы с тестами (обязательный параметр)
         """
         if quiz_service is None:
-            # Логируем проблему и пытаемся создать новый сервис
-            logger.warning("StudentHandler создан без quiz_service!")
-            try:
-                from services.quiz_service import QuizService
-                self.quiz_service = QuizService()
-                logger.info("Создан новый экземпляр QuizService в StudentHandler")
-            except Exception as e:
-                logger.error(f"Не удалось создать QuizService: {e}")
-                self.quiz_service = None
-        else:
-            self.quiz_service = quiz_service
+            raise ValueError("quiz_service не может быть None")
+
+        self.quiz_service = quiz_service
+        logger.info("StudentHandler инициализирован с quiz_service")
 
     async def start_test(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Обработчик команды /test для начала тестирования"""
@@ -45,48 +38,50 @@ class StudentHandler:
             user_id = update.effective_user.id
             logger.info(f"Запуск теста для пользователя {user_id}")
 
-            # Проверка инициализации quiz_service
-            if not hasattr(self, 'quiz_service') or self.quiz_service is None:
-                logger.error("Quiz service не инициализирован!")
+            # Проверяем, есть ли уже активный тест
+            if user_id in self.quiz_service.active_quizzes:
+                active_quiz = self.quiz_service.active_quizzes[user_id]
 
-                # Отправляем сообщение об ошибке в зависимости от источника вызова
-                if update.callback_query:
-                    await update.callback_query.edit_message_text(
-                        "Произошла ошибка при запуске теста. Пожалуйста, попробуйте позже или обратитесь к администратору."
-                    )
+                # Проверяем, не истек ли срок теста
+                if active_quiz.get("end_time") and active_quiz["end_time"] > datetime.now(timezone.utc):
+                    if update.callback_query:
+                        await update.callback_query.edit_message_text(
+                            "У вас уже есть активный тест. Пожалуйста, завершите его перед началом нового."
+                        )
+                    else:
+                        await update.message.reply_text(
+                            "У вас уже есть активный тест. Пожалуйста, завершите его перед началом нового."
+                        )
+                    return
                 else:
-                    await update.message.reply_text(
-                        "Произошла ошибка при запуске теста. Пожалуйста, попробуйте позже или обратитесь к администратору."
-                    )
-                return
+                    # Удаляем истекший тест
+                    del self.quiz_service.active_quizzes[user_id]
 
             # Получаем список доступных тем
             topics = self.quiz_service.get_topics()
 
             if not topics:
-                # Проверяем, откуда был вызов - из сообщения или кнопки
+                error_msg = "К сожалению, доступных тем для тестирования нет. Пожалуйста, попробуйте позже."
                 if update.callback_query:
-                    await update.callback_query.edit_message_text(
-                        "К сожалению, доступных тем для тестирования нет. Пожалуйста, попробуйте позже."
-                    )
+                    await update.callback_query.edit_message_text(error_msg)
                 else:
-                    await update.message.reply_text(
-                        "К сожалению, доступных тем для тестирования нет. Пожалуйста, попробуйте позже."
-                    )
+                    await update.message.reply_text(error_msg)
                 return
 
             # Используем готовую клавиатуру
             reply_markup = topic_selection_keyboard(topics)
 
-            # Отправляем сообщение в зависимости от источника вызова
+            # Отправляем сообщение
+            message_text = "Выберите тему для тестирования:"
+
             if update.callback_query:
                 await update.callback_query.edit_message_text(
-                    "Выберите тему для тестирования:",
+                    message_text,
                     reply_markup=reply_markup
                 )
             else:
                 await update.message.reply_text(
-                    "Выберите тему для тестирования:",
+                    message_text,
                     reply_markup=reply_markup
                 )
 
@@ -96,13 +91,14 @@ class StudentHandler:
 
             error_message = "Произошла ошибка при запуске теста. Пожалуйста, попробуйте еще раз позже."
 
-            # Отправляем сообщение об ошибке в зависимости от источника вызова
             if update.callback_query:
                 try:
                     await update.callback_query.edit_message_text(error_message)
                 except Exception:
-                    user_id = update.effective_user.id
-                    await context.bot.send_message(chat_id=user_id, text=error_message)
+                    await context.bot.send_message(
+                        chat_id=update.effective_user.id,
+                        text=error_message
+                    )
             else:
                 await update.message.reply_text(error_message)
 
