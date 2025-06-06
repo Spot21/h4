@@ -2,9 +2,9 @@ import logging
 import os
 import traceback
 from contextlib import contextmanager
-from typing import Optional
-from sqlalchemy import create_engine, event, exc
-from sqlalchemy.orm import sessionmaker, scoped_session
+from typing import Optional, Generator
+from sqlalchemy import create_engine, event, exc, pool
+from sqlalchemy.orm import sessionmaker, scoped_session, Session as SQLAlchemySession
 from sqlalchemy.exc import SQLAlchemyError
 
 from config import DB_ENGINE, DATA_DIR, ADMINS
@@ -16,30 +16,36 @@ logger = logging.getLogger(__name__)
 is_sqlite = DB_ENGINE.startswith('sqlite:///')
 is_postgres = DB_ENGINE.startswith('postgresql://')
 
-# Создаем движок базы данных с улучшенными настройками
+# Создаем DB_ENGINE c настройками
 if is_postgres:
     engine = create_engine(
         DB_ENGINE,
         echo=False,
-        pool_size=20,
-        max_overflow=30,
+        # Уменьшаем pool_size для стабильности
+        pool_size=10,  # Было 20
+        max_overflow=20,  # Было 30
         pool_timeout=30,
-        pool_recycle=3600,
+        pool_recycle=1800,  # Было 3600, уменьшаем для более частого обновления соединений
         pool_pre_ping=True,
-        connect_args={  # Только для PostgreSQL
+        # Используем QueuePool для PostgreSQL
+        poolclass=pool.QueuePool,
+        connect_args={
             "connect_timeout": 10,
             "keepalives": 1,
             "keepalives_idle": 30,
             "keepalives_interval": 10,
-            "keepalives_count": 5
+            "keepalives_count": 5,
+            # Добавляем параметры для автоматического переподключения
+            "options": "-c statement_timeout=30000"  # 30 секунд таймаут для запросов
         }
     )
 else:
-    # Для SQLite или других движков
+    # Для SQLite используем StaticPool для избежания проблем с потоками
     engine = create_engine(
         DB_ENGINE,
         echo=False,
-        pool_pre_ping=True
+        poolclass=pool.StaticPool,
+        connect_args={"check_same_thread": False}
     )
 
 # Создаем фабрику сессий с автоматическим expire_on_commit=False для работы с объектами после коммита
@@ -103,8 +109,9 @@ def init_db():
         raise
 
 
+# Улучшенный контекстный менеджер сессий
 @contextmanager
-def get_session():
+def get_session() -> Generator[SQLAlchemySession, None, None]:
     """Улучшенный контекстный менеджер для работы с сессией"""
     session = Session()
     try:
@@ -122,8 +129,10 @@ def get_session():
         logger.error(traceback.format_exc())
         raise
     finally:
+        # Важно: закрываем сессию в любом случае
         session.close()
-        Session.remove()  # Важно! Удаляем сессию из scoped_session
+        # Удаляем сессию из registry
+        Session.remove()
 
 
 def add_default_data(session=None):
