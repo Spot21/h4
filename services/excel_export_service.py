@@ -1,6 +1,6 @@
 import pandas as pd
 from io import BytesIO
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, distinct
 
@@ -15,7 +15,7 @@ class ExcelExportService:
         """Экспорт результатов тестов в Excel"""
         with get_session() as session:
             # Определяем временной интервал
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             if period == "week":
                 start_date = now - timedelta(days=7)
             elif period == "month":
